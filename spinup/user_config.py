@@ -1,4 +1,3 @@
-import os
 import os.path as osp
 
 # Where experiment outputs are saved by default:
@@ -13,4 +12,4 @@ DEFAULT_SHORTHAND = True
 
 # Tells the GridSearch how many seconds to pause for before launching 
 # experiments.
-WAIT_BEFORE_LAUNCH = 5
+WAIT_BEFORE_LAUNCH = 0
