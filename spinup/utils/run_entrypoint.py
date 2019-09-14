@@ -1,6 +1,9 @@
-import zlib
-import pickle
 import base64
+import pickle
+import zlib
+
+# Register custom envs
+
 
 if __name__ == '__main__':
     import argparse

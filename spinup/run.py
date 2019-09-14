@@ -1,15 +1,12 @@
-import spinup
-from spinup.utils.run_utils import ExperimentGrid
-from spinup.utils.serialization_utils import convert_json
-import argparse
-import gym
-import json
-import os, subprocess, sys
+import os
 import os.path as osp
-import string
-import tensorflow as tf
+import subprocess
+import sys
 from textwrap import dedent
 
+import gym
+
+from spinup.utils.run_utils import ExperimentGrid
 
 # Command line args that will go to ExperimentGrid.run, and must possess unique
 # values (therefore must be treated separately).
