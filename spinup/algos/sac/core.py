@@ -68,6 +68,9 @@ def mlp_gaussian_policy(x, a, hidden_sizes, activation, output_activation):
     std = tf.exp(log_std)
     pi = mu + tf.random_normal(tf.shape(mu)) * std
     logp_pi = gaussian_likelihood(pi, mu, log_std)
+
+    # TODO: Just return this fucking std without the random normal and use
+    #   that mother fucker to get the best action.
     return mu, pi, logp_pi
 
 def apply_squashing_func(mu, pi, logp_pi):
