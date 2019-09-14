@@ -1,6 +1,7 @@
-from os.path import join, dirname, realpath
-from setuptools import setup
 import sys
+from os.path import join
+
+from setuptools import setup
 
 assert sys.version_info.major == 3 and sys.version_info.minor >= 6, \
     "The Spinning Up repo is designed to work with Python 3.6 and greater." \
@@ -14,18 +15,18 @@ setup(
     py_modules=['spinup'],
     version=__version__,#'0.1',
     install_requires=[
-        'cloudpickle==0.5.2',
+        'cloudpickle',
         'gym[atari,box2d,classic_control]>=0.10.8',
         'ipython',
         'joblib',
-        'matplotlib==3.0.2',
+        'matplotlib',
         'mpi4py',
         'numpy',
         'pandas',
         'pytest',
         'psutil',
         'scipy',
-        'seaborn==0.8.1',
+        'seaborn',
         'tensorflow>=1.8.0,<2.0',
         'tqdm'
     ],
