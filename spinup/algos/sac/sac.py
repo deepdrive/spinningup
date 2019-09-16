@@ -9,6 +9,7 @@ from spinup.algos.sac import core
 from spinup.algos.sac.core import get_vars
 from spinup.utils.logx import EpochLogger
 
+printed_deterministic = False
 
 class ReplayBuffer:
     """
@@ -153,11 +154,16 @@ def sac(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     # Main outputs from computation graph
     with tf.variable_scope('main'):
-        mu, pi, logp_pi, q1, q2, q1_pi, q2_pi, v = actor_critic(x_ph, a_ph, **ac_kwargs)
-    
+        mu, pi, pi_test, logp_pi, q1, q2, q1_pi, q2_pi, v = \
+            actor_critic(x_ph, a_ph, **ac_kwargs)
+
+    # x_ph = tf.Print(x_ph, [x_ph], 'mu', summarize=100)
+    mu = tf.Print(mu, [mu], 'mu', summarize=100)
+    pi = tf.Print(pi, [pi], 'pi', summarize=100)
+
     # Target value network
     with tf.variable_scope('target'):
-        _, _, _, _, _, _, _, v_targ  = actor_critic(x2_ph, a_ph, **ac_kwargs)
+        _, _, _, _, _, _, _, _, v_targ  = actor_critic(x2_ph, a_ph, **ac_kwargs)
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
@@ -213,15 +219,23 @@ def sac(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     sess.run(target_init)
 
     # Setup model saving
-    logger.setup_tf_saver(sess, inputs={'x': x_ph, 'a': a_ph}, 
-                                outputs={'mu': mu, 'pi': pi, 'q1': q1, 'q2': q2, 'v': v})
+    logger.setup_tf_saver(
+        sess,
+        inputs={'x': x_ph, 'a': a_ph},
+        outputs={'mu': mu, 'pi': pi, 'pi_test': pi_test, 'q1': q1, 'q2': q2,
+                 'v': v})
 
     def get_action(o, deterministic=False):
+        # global sess, mu, pi, pi_test, q1, q2, q1_pi, q2_pi, printed_deterministic
         act_op = mu if deterministic else pi
+        global printed_deterministic
+        if not printed_deterministic:
+            print(f'IS DETERMINISTIC: {deterministic}')
+            printed_deterministic = True
         return sess.run(act_op, feed_dict={x_ph: o.reshape(1,-1)})[0]
 
     def test_agent(n=10):
-        global sess, mu, pi, q1, q2, q1_pi, q2_pi
+        global sess, mu, pi, pi_test, q1, q2, q1_pi, q2_pi, printed_deterministic
         for j in range(n):
             o, r, d, ep_ret, ep_len = test_env.reset(), 0, False, 0, 0
             while not(d or (ep_len == max_ep_len)):
@@ -251,6 +265,7 @@ def sac(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
         # Step the env
         o2, r, d, _ = env.step(a)
+        # log.info(f'o {o2} r {r} done {d}')
         ep_ret += r
         ep_len += 1
 

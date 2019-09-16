@@ -67,18 +67,18 @@ def mlp_gaussian_policy(x, a, hidden_sizes, activation, output_activation):
 
     std = tf.exp(log_std)
     pi = mu + tf.random_normal(tf.shape(mu)) * std
+    pi_test = mu - std
     logp_pi = gaussian_likelihood(pi, mu, log_std)
 
-    # TODO: Just return this fucking std without the random normal and use
-    #   that mother fucker to get the best action.
-    return mu, pi, logp_pi
+    return mu, pi, logp_pi, pi_test
 
-def apply_squashing_func(mu, pi, logp_pi):
+def apply_squashing_func(mu, pi, pi_test, logp_pi):
     mu = tf.tanh(mu)
     pi = tf.tanh(pi)
+    pi_test = tf.tanh(pi_test)
     # To avoid evil machine precision error, strictly clip 1-pi**2 to [0,1] range.
     logp_pi -= tf.reduce_sum(tf.log(clip_but_pass_gradient(1 - pi**2, l=0, u=1) + 1e-6), axis=1)
-    return mu, pi, logp_pi
+    return mu, pi, logp_pi, pi_test
 
 
 """
@@ -88,8 +88,10 @@ def mlp_actor_critic(x, a, hidden_sizes=(400,300), activation=tf.nn.relu,
                      output_activation=None, policy=mlp_gaussian_policy, action_space=None):
     # policy
     with tf.variable_scope('pi'):
-        mu, pi, logp_pi = policy(x, a, hidden_sizes, activation, output_activation)
-        mu, pi, logp_pi = apply_squashing_func(mu, pi, logp_pi)
+        mu, pi, logp_pi, pi_test = \
+            policy(x, a, hidden_sizes, activation, output_activation)
+        mu, pi, logp_pi, pi_test = apply_squashing_func(mu, pi, pi_test,
+                                                        logp_pi)
 
     # make sure actions are in correct range
     action_scale = action_space.high[0]
@@ -108,4 +110,4 @@ def mlp_actor_critic(x, a, hidden_sizes=(400,300), activation=tf.nn.relu,
         q2_pi = vf_mlp(tf.concat([x,pi], axis=-1))
     with tf.variable_scope('v'):
         v = vf_mlp(x)
-    return mu, pi, logp_pi, q1, q2, q1_pi, q2_pi, v
+    return mu, pi, pi_test, logp_pi, q1, q2, q1_pi, q2_pi, v
