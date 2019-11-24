@@ -139,6 +139,10 @@ def sac(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     tf.set_random_seed(seed)
     np.random.seed(seed)
 
+    # Register custom envs
+    import gym_match_input_continuous
+    import deepdrive_2d
+
     env, test_env = env_fn(), env_fn()
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
@@ -158,8 +162,8 @@ def sac(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             actor_critic(x_ph, a_ph, **ac_kwargs)
 
     # x_ph = tf.Print(x_ph, [x_ph], 'mu', summarize=100)
-    mu = tf.Print(mu, [mu], 'mu', summarize=100)
-    pi = tf.Print(pi, [pi], 'pi', summarize=100)
+    # mu = tf.Print(mu, [mu], 'mu', summarize=100)
+    # pi = tf.Print(pi, [pi], 'pi', summarize=100)
 
     # Target value network
     with tf.variable_scope('target'):

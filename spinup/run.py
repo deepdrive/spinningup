@@ -1,12 +1,19 @@
-import os
+import spinup
+from spinup.utils.run_utils import ExperimentGrid
+from spinup.utils.serialization_utils import convert_json
+import argparse
+import gym
+import json
+import os, subprocess, sys
 import os.path as osp
-import subprocess
-import sys
+import string
+import tensorflow as tf
 from textwrap import dedent
 
-import gym
+# Register custom envs
+import gym_match_input_continuous
+import deepdrive_2d
 
-from spinup.utils.run_utils import ExperimentGrid
 
 # Command line args that will go to ExperimentGrid.run, and must possess unique
 # values (therefore must be treated separately).

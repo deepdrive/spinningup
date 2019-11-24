@@ -92,7 +92,7 @@ with early stopping based on approximate KL
 def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
-        target_kl=0.01, logger_kwargs=dict(), save_freq=10):
+        target_kl=0.01, logger_kwargs=dict(), save_freq=10, **kwargs):
     """
 
     Args:
@@ -171,6 +171,10 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     seed += 10000 * proc_id()
     tf.set_random_seed(seed)
     np.random.seed(seed)
+
+    # Register custom envs
+    import gym_match_input_continuous
+    import deepdrive_2d
 
     env = env_fn()
     obs_dim = env.observation_space.shape
@@ -311,7 +315,8 @@ if __name__ == '__main__':
     parser.add_argument('--steps', type=int, default=4000)
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--exp_name', type=str, default='ppo')
-    args = parser.parse_args()
+    # args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
 
     mpi_fork(args.cpu)  # run parallel code with mpi
 
