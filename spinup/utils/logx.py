@@ -290,10 +290,14 @@ class EpochLogger(Logger):
         Provide an arbitrary number of keyword arguments with numerical 
         values.
         """
-        for k,v in kwargs.items():
-            if not(k in self.epoch_dict.keys()):
-                self.epoch_dict[k] = []
-            self.epoch_dict[k].append(v)
+        for k, v in kwargs.items():
+            if not is_number(v):
+                pass
+                # print(f'warning - value for {k} is not a number: {v}')
+            else:
+                if not(k in self.epoch_dict.keys()):
+                    self.epoch_dict[k] = []
+                self.epoch_dict[k].append(v)
 
     def log_tabular(self, key, val=None, with_min_and_max=False, average_only=False):
         """
@@ -317,6 +321,8 @@ class EpochLogger(Logger):
         if val is not None:
             super().log_tabular(key,val)
         else:
+            if key not in self.epoch_dict:
+                return
             v = self.epoch_dict[key]
             vals = np.concatenate(v) if isinstance(v[0], np.ndarray) and len(v[0].shape)>0 else v
             stats = mpi_statistics_scalar(vals, with_min_and_max=with_min_and_max)
@@ -335,3 +341,11 @@ class EpochLogger(Logger):
         v = self.epoch_dict[key]
         vals = np.concatenate(v) if isinstance(v[0], np.ndarray) and len(v[0].shape)>0 else v
         return mpi_statistics_scalar(vals)
+
+
+def is_number(s):
+    try:
+        float(s)
+        return True
+    except Exception:
+        return False
