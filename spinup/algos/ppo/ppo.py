@@ -1,3 +1,6 @@
+import math
+from collections import deque
+
 import numpy as np
 import tensorflow as tf
 import gym
@@ -254,8 +257,15 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     start_time = time.time()
     o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
 
+    effective_horizon = round(1 / (1 - gamma))
+    effective_horizon_rewards = deque(maxlen=effective_horizon)
+
+
+
+
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
+        info = {}
         for t in range(local_steps_per_epoch):
             a, v_t, logp_t = sess.run(get_action_ops, feed_dict={x_ph: o.reshape(1,-1)})
 
@@ -263,9 +273,16 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             buf.store(o, a, r, v_t, logp_t)
             logger.store(VVals=v_t)
 
-            o, r, d, _ = env.step(a[0])
+            o, r, d, info = env.step(a[0])
+            effective_horizon_rewards.append(r)
             ep_ret += r
             ep_len += 1
+
+            if 'stats' in info:
+                logger.store(**info['stats'])
+
+            logger.store(horizon_return=sum(effective_horizon_rewards))
+
 
             terminal = d or (ep_len == max_ep_len)
             if terminal or (t==local_steps_per_epoch-1):
@@ -301,7 +318,14 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('ClipFrac', average_only=True)
         logger.log_tabular('StopIter', average_only=True)
         logger.log_tabular('Time', time.time()-start_time)
+        logger.log_tabular('horizon_return', with_min_and_max=True)
+
+        if 'stats' in info:
+            for stat, value in info['stats'].items():
+                logger.log_tabular(stat, with_min_and_max=True)
+
         logger.dump_tabular()
+
 
 if __name__ == '__main__':
     import argparse
