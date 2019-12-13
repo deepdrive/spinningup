@@ -180,6 +180,12 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     import deepdrive_2d
 
     env = env_fn()
+
+    if hasattr(env.unwrapped, 'gamma'):
+        logger.log(f'Gamma set by environment to {env.unwrapped.gamma}.'
+                   f' Overriding current value of {gamma}')
+        gamma = env.unwrapped.gamma
+
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
     
@@ -259,9 +265,6 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     effective_horizon = round(1 / (1 - gamma))
     effective_horizon_rewards = deque(maxlen=effective_horizon)
-
-
-
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
