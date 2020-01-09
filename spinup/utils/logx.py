@@ -6,6 +6,8 @@ Logs to a tab-separated-values file (path/to/output_directory/progress.txt)
 
 """
 import json
+from os.path import dirname, join
+
 import joblib
 import shutil
 import numpy as np
@@ -13,6 +15,7 @@ import tensorflow as tf
 import os.path as osp, time, atexit, os
 from spinup.utils.mpi_tools import proc_id, mpi_statistics_scalar
 from spinup.utils.serialization_utils import convert_json
+from utils.save_load_scope import load_scope
 
 color2num = dict(
     gray=30,
@@ -38,6 +41,7 @@ def colorize(string, color, bold=False, highlight=False):
     attr.append(str(num))
     if bold: attr.append('1')
     return '\x1b[%sm%s\x1b[0m' % (';'.join(attr), string)
+
 
 def restore_tf_graph(sess, fpath):
     """
@@ -65,6 +69,36 @@ def restore_tf_graph(sess, fpath):
     model.update({k: graph.get_tensor_by_name(v) for k,v in model_info['inputs'].items()})
     model.update({k: graph.get_tensor_by_name(v) for k,v in model_info['outputs'].items()})
     return model
+
+
+def restore_tf_graph_model_only(sess, fpath):
+    """
+    Loads graphs saved by Logger.
+
+    Will output a dictionary whose keys and values are from the 'inputs'
+    and 'outputs' dict you specified with logger.setup_tf_saver().
+
+    Args:
+        sess: A Tensorflow session.
+        fpath: Filepath to save directory.
+
+    Returns:
+        A dictionary mapping from keys to tensors in the computation graph
+        loaded from ``fpath``.
+    """
+
+    # DOESN'T WORK - Still loads Adam variables, need reinitialize hack to
+    # workaround
+
+    load_scope('model', fpath, sess)
+    model_info_dir = join(dirname(dirname(fpath)), 'simple_save')
+    model_info = joblib.load(osp.join(model_info_dir, 'model_info.pkl'))
+    graph = tf.get_default_graph()
+    model = dict()
+    model.update({k: graph.get_tensor_by_name(v) for k,v in model_info['inputs'].items()})
+    model.update({k: graph.get_tensor_by_name(v) for k,v in model_info['outputs'].items()})
+    return model
+
 
 class Logger:
     """
@@ -214,7 +248,7 @@ class Logger:
         Uses simple_save to save a trained model, plus info to make it easy
         to associated tensors to variables after restore. 
         """
-        if proc_id()==0:
+        if proc_id() == 0:
             assert hasattr(self, 'tf_saver_elements'), \
                 "First have to setup saving with self.setup_tf_saver"
             fpath = 'simple_save' + ('%d'%itr if itr is not None else '')
