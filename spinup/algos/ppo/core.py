@@ -97,8 +97,9 @@ def mlp_actor_critic(x, a, hidden_sizes=(64,64), activation=tf.tanh,
     elif policy is None and isinstance(action_space, Discrete):
         policy = mlp_categorical_policy
 
-    with tf.variable_scope('pi'):
-        pi, logp, logp_pi = policy(x, a, hidden_sizes, activation, output_activation, action_space)
-    with tf.variable_scope('v'):
-        v = tf.squeeze(mlp(x, list(hidden_sizes)+[1], activation, None), axis=1)
+    with tf.variable_scope('model'):
+        with tf.variable_scope('pi'):
+            pi, logp, logp_pi = policy(x, a, hidden_sizes, activation, output_activation, action_space)
+        with tf.variable_scope('v'):
+            v = tf.squeeze(mlp(x, list(hidden_sizes)+[1], activation, None), axis=1)
     return pi, logp, logp_pi, v
