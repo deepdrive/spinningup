@@ -92,10 +92,12 @@ Proximal Policy Optimization (by clipping),
 with early stopping based on approximate KL
 
 """
-def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0, 
+def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
-        target_kl=0.01, logger_kwargs=dict(), save_freq=10, **kwargs):
+        target_kl=0.01, logger_kwargs=dict(), save_freq=10, resume_path=None,
+        reinitialize_optimizer_on_resume=True,
+        **kwargs):
     """
 
     Args:
@@ -166,6 +168,13 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
 
+        resume_path (str): Path to directory with simple_save model info
+            you wish to resume from
+
+        reinitialize_optimizer_on_resume: (bool) Whether to initialize
+            non-trainable variables in the tensorflow graph such as Adam
+            state
+
     """
 
     logger = EpochLogger(**logger_kwargs)
@@ -196,7 +205,10 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     x_ph, a_ph = core.placeholders_from_spaces(env.observation_space, env.action_space)
     adv_ph, ret_ph, logp_old_ph = core.placeholders(None, None, None)
 
-    # Main outputs from computation graph
+    sess = tf.Session(
+        # config=tf.ConfigProto(log_device_placement=True)
+    )
+
     pi, logp, logp_pi, v = actor_critic(x_ph, a_ph, **ac_kwargs)
 
     # Need all placeholders in *this* order later (to zip with data from buffer)
@@ -229,14 +241,30 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     train_pi = MpiAdamOptimizer(learning_rate=pi_lr).minimize(pi_loss)
     train_v = MpiAdamOptimizer(learning_rate=vf_lr).minimize(v_loss)
 
-    sess = tf.Session()
     sess.run(tf.global_variables_initializer())
+
+    # Main outputs from computation graph
+    if resume_path is not None:
+        from utils.test_policy import get_policy_model
+        # Caution! We assume action space has not changed here.
+        saved_model, _ = get_policy_model(resume_path, sess)
+        pi, logp, logp_pi, v = (saved_model['pi'], saved_model['logp'],
+                                saved_model['logp_pi'], saved_model['v'])
+
+        if reinitialize_optimizer_on_resume:
+            # HACK to reinitialize our optimizer variables\
+            trainable_variables = tf.trainable_variables()
+            non_trainable_variables = [v for v in tf.global_variables()
+                                       if v not in trainable_variables]
+            sess.run(tf.variables_initializer(non_trainable_variables))
 
     # Sync params across processes
     sess.run(sync_all_params())
 
     # Setup model saving
-    logger.setup_tf_saver(sess, inputs={'x': x_ph}, outputs={'pi': pi, 'v': v})
+    logger.setup_tf_saver(sess, inputs={'x': x_ph},
+                          outputs={'pi': pi, 'v': v, 'logp_pi': logp_pi,
+                                   'logp': logp})
 
     def update():
         inputs = {k:v for k,v in zip(all_phs, buf.get())}
@@ -302,6 +330,11 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
             logger.save_state({'env': env}, None)
+
+            # logger.save_state saves optimizer state which we don't want for
+            # resuming purposes, so save model variables here separately
+            save_scope('model', join(logger.output_dir, 'model_only/'), sess)
+
 
         # Perform PPO update!
         update()

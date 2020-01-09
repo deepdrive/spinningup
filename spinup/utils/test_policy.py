@@ -4,20 +4,29 @@ import os
 import os.path as osp
 import tensorflow as tf
 from spinup import EpochLogger
-from spinup.utils.logx import restore_tf_graph
+from spinup.utils.logx import restore_tf_graph, restore_tf_graph_model_only
 
-def load_policy(fpath, itr='last', deterministic=False):
+
+def get_policy_model(fpath, sess, itr='last'):
 
     # handle which epoch to load from
-    if itr=='last':
+    if itr == 'last':
         saves = [int(x[11:]) for x in os.listdir(fpath) if 'simple_save' in x and len(x)>11]
         itr = '%d'%max(saves) if len(saves) > 0 else ''
     else:
-        itr = '%d'%itr
+        itr = '%d' % itr
 
     # load the things!
+    model = restore_tf_graph_model_only(
+        sess, osp.join(fpath, 'model_only/'))
+
+    return model, itr
+
+
+def load_policy(fpath, itr='last', deterministic=False):
+
     sess = tf.Session()
-    model = restore_tf_graph(sess, osp.join(fpath, 'simple_save'+itr))
+    model, itr = get_policy_model(fpath, sess, itr)
 
     # get the correct op for executing actions
     if deterministic and 'mu' in model.keys():
