@@ -10,7 +10,7 @@ import spinup.algos.ppo.core as core
 from spinup.utils.logx import EpochLogger
 from spinup.utils.mpi_tf import MpiAdamOptimizer, sync_all_params
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
-from utils.save_load_scope import save_scope
+from spinup.utils.save_load_scope import save_scope
 
 
 class PPOBuffer:
