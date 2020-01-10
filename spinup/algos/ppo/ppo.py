@@ -98,7 +98,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10, resume_path=None,
-        reinitialize_optimizer_on_resume=True,
+        reinitialize_optimizer_on_resume=True, render=False,
         **kwargs):
     """
 
@@ -176,6 +176,10 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         reinitialize_optimizer_on_resume: (bool) Whether to initialize
             non-trainable variables in the tensorflow graph such as Adam
             state
+
+        render: (bool) Whether to render the env during training. Useful for
+            checking that resumption of training caused visual performance
+            to carry over
 
     """
 
@@ -284,7 +288,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             sess.run(train_v, feed_dict=inputs)
 
         # Log changes from update
-        pi_l_new, v_l_new, kl, cf = sess.run([pi_loss, v_loss, approx_kl, clipfrac], feed_dict=inputs)
+        pi_l_new, v_l_new, kl, cf = sess.run([pi_loss, v_loss, approx_kl,
+                                              clipfrac], feed_dict=inputs)
         logger.store(LossPi=pi_l_old, LossV=v_l_old, 
                      KL=kl, Entropy=ent, ClipFrac=cf,
                      DeltaLossPi=(pi_l_new - pi_l_old),
@@ -306,7 +311,11 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             buf.store(o, a, r, v_t, logp_t)
             logger.store(VVals=v_t)
 
+            if render:
+                env.render()
+
             o, r, d, info = env.step(a[0])
+
             effective_horizon_rewards.append(r)
             ep_ret += r
             ep_len += 1
