@@ -15,7 +15,7 @@ import tensorflow as tf
 import os.path as osp, time, atexit, os
 from spinup.utils.mpi_tools import proc_id, mpi_statistics_scalar
 from spinup.utils.serialization_utils import convert_json
-from utils.save_load_scope import load_scope
+from spinup.utils.save_load_scope import load_scope
 
 color2num = dict(
     gray=30,
@@ -88,7 +88,9 @@ def restore_tf_graph_model_only(sess, fpath):
     """
 
     # DOESN'T WORK - Still loads Adam variables, need reinitialize hack to
-    # workaround
+    # workaround. Keeping this, however, as it explicitly defines variables
+    # to save via scope, and hopefully will help in the future with variables
+    # that tf CAN actually extract.
 
     load_scope('model', fpath, sess)
     model_info_dir = join(dirname(dirname(fpath)), 'simple_save')

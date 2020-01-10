@@ -7,7 +7,7 @@ from spinup import EpochLogger
 from spinup.utils.logx import restore_tf_graph, restore_tf_graph_model_only
 
 
-def get_policy_model(fpath, sess, itr='last'):
+def get_policy_model(fpath, sess, itr='last', use_model_only=True):
 
     # handle which epoch to load from
     if itr == 'last':
@@ -17,16 +17,20 @@ def get_policy_model(fpath, sess, itr='last'):
         itr = '%d' % itr
 
     # load the things!
-    model = restore_tf_graph_model_only(
-        sess, osp.join(fpath, 'model_only/'))
+    if use_model_only:
+        model = restore_tf_graph_model_only(
+            sess, osp.join(fpath, 'model_only/'))
+    else:
+        model = restore_tf_graph(sess, osp.join(fpath, 'simple_save'+itr))
 
     return model, itr
 
 
-def load_policy(fpath, itr='last', deterministic=False):
+def load_policy(fpath, itr='last', deterministic=False, use_model_only=False):
 
     sess = tf.Session()
-    model, itr = get_policy_model(fpath, sess, itr)
+    model, itr = get_policy_model(fpath, sess, itr,
+                                  use_model_only=use_model_only)
 
     # get the correct op for executing actions
     if deterministic and 'mu' in model.keys():
