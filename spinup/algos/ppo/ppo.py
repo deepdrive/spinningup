@@ -65,7 +65,7 @@ class PPOBuffer:
         self.ptr[agent_index] += 1
         self.size += 1
 
-    def finish_path(self, last_val=0):
+    def finish_path(self, agent_index, last_val=0):
         """
         Call this at the end of a trajectory, or when one gets cut off
         by an epoch ending. This looks back in the buffer to where the
@@ -81,21 +81,22 @@ class PPOBuffer:
         for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
         """
 
-        for i in range(self.num_agents):
-            path_slice = slice(self.path_start_idx[i], self.ptr[i])
-            rews = np.append(self.rew_buf[i][path_slice], last_val)
-            vals = np.append(self.val_buf[i][path_slice], last_val)
+        i = agent_index
 
-            # the next two lines implement GAE-Lambda advantage calculation
-            deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
-            self.adv_buf[i][path_slice] = core.discount_cumsum(
-                deltas, self.gamma * self.lam)
+        path_slice = slice(self.path_start_idx[i], self.ptr[i])
+        rews = np.append(self.rew_buf[i][path_slice], last_val)
+        vals = np.append(self.val_buf[i][path_slice], last_val)
 
-            # the next line computes rewards-to-go, to be targets for the value function
-            self.ret_buf[i][path_slice] = core.discount_cumsum(rews, self.gamma)[
-                                       :-1]
+        # the next two lines implement GAE-Lambda advantage calculation
+        deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
+        self.adv_buf[i][path_slice] = core.discount_cumsum(
+            deltas, self.gamma * self.lam)
 
-            self.path_start_idx[i] = self.ptr[i]
+        # the next line computes rewards-to-go, to be targets for the value function
+        self.ret_buf[i][path_slice] = core.discount_cumsum(rews, self.gamma)[
+                                   :-1]
+
+        self.path_start_idx[i] = self.ptr[i]
 
     def get(self):
         """
@@ -238,6 +239,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     env = env_fn()
 
+    num_agents = env.num_agents
+
     if hasattr(env.unwrapped, 'gamma'):
         logger.log(f'Gamma set by environment to {env.unwrapped.gamma}.'
                    f' Overriding current value of {gamma}')
@@ -268,7 +271,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     # Experience buffer
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
-    buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
+    buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam,
+                    env.num_agents)
 
     # Count variables
     var_counts = tuple(core.count_vars(scope) for scope in ['pi', 'v'])
@@ -344,7 +348,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                      DeltaLossV=(v_l_new - v_l_old))
 
     start_time = time.time()
-    o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+
+    previous_step_outputs = reset(env, num_agents)
 
     effective_horizon = round(1 / (1 - gamma))
     effective_horizon_rewards = deque(maxlen=effective_horizon)
@@ -353,11 +358,14 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     for epoch in range(epochs):
         info = {}
         for t in range(local_steps_per_epoch):
+            agent_index = env.agent_index
+            agent = env.agents[agent_index]
+            o, r, d, ep_ret, ep_len = previous_step_outputs[agent_index]
             a, v_t, logp_t = sess.run(get_action_ops,
                                       feed_dict={x_ph: o.reshape(1, -1)})
 
             # save and log
-            buf.store(o, a, r, v_t, logp_t, 0)
+            buf.store(o, a, r, v_t, logp_t, env.agent_index)
             logger.store(VVals=v_t)
 
             if render:
@@ -376,17 +384,17 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
             terminal = d or (ep_len == max_ep_len)
             if terminal or (t == local_steps_per_epoch - 1):
-                if not (terminal):
-                    print(
-                        'Warning: trajectory cut off by epoch at %d steps.' % ep_len)
+                if not terminal:
+                    print('Warning: trajectory cut off by epoch at %d steps.' % ep_len)
                 # if trajectory didn't reach terminal state, bootstrap value target
                 last_val = r if d else sess.run(v, feed_dict={
                     x_ph: o.reshape(1, -1)})
-                buf.finish_path(last_val)
+                buf.finish_path(agent_index, last_val)
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
-                o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+                previous_step_outputs = reset(env, num_agents)
+            previous_step_outputs[agent_index] = (o, r, d, ep_ret, ep_len)
 
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs - 1):
@@ -421,6 +429,14 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                 logger.log_tabular(stat, with_min_and_max=True)
 
         logger.dump_tabular()
+
+
+def reset(env, num_agents):
+    previous_step_outputs = []
+    for agent_index in range(num_agents):
+        agent = env.agents[agent_index]
+        previous_step_outputs.append((agent.reset(), 0, False, 0, 0))
+    return previous_step_outputs
 
 
 if __name__ == '__main__':
