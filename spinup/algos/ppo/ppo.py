@@ -436,6 +436,7 @@ def reset(env, num_agents):
     for agent_index in range(num_agents):
         agent = env.agents[agent_index]
         previous_step_outputs.append((agent.reset(), 0, False, 0, 0))
+    env.reset()
     return previous_step_outputs
 
 
