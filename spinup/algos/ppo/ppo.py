@@ -359,7 +359,6 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         info = {}
         for t in range(local_steps_per_epoch):
             agent_index = env.agent_index
-            agent = env.agents[agent_index]
             o, r, d, ep_ret, ep_len = previous_step_outputs[agent_index]
             a, v_t, logp_t = sess.run(get_action_ops,
                                       feed_dict={x_ph: o.reshape(1, -1)})
