@@ -376,7 +376,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             ep_ret += r
             ep_len += 1
 
-            if 'stats' in info:
+            if 'stats' in info and info['stats']:
                 logger.store(**info['stats'])
 
             logger.store(horizon_return=sum(effective_horizon_rewards))
@@ -423,7 +423,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('Time', time.time() - start_time)
         logger.log_tabular('horizon_return', with_min_and_max=True)
 
-        if 'stats' in info:
+        if 'stats' in info and info['stats']:
             for stat, value in info['stats'].items():
                 logger.log_tabular(stat, with_min_and_max=True)
 
