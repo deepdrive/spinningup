@@ -109,9 +109,6 @@ class PPOBuffer:
         self.ptr = np.zeros((self.num_agents,), dtype=np.int)
         self.path_start_idx = np.zeros((self.num_agents,), dtype=np.int)
 
-        # TODO: Flatten the num_agents dimension by concatenating the finished
-        #  episodes
-
         obs_buf = self.obs_buf.reshape(core.combined_shape(
             self.num_agents * self.n_size, self.obs_dim))
         act_buf = self.act_buf.reshape(core.combined_shape(
