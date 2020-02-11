@@ -361,7 +361,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                                       feed_dict={x_ph: o.reshape(1, -1)})
 
             # save and log
-            buf.store(o, a, r, v_t, logp_t, env.agent_index)
+            buf.store(o, a, r, v_t, logp_t, agent_index)
             logger.store(VVals=v_t)
 
             if render:
@@ -389,7 +389,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
-                previous_step_outputs = reset(env, num_agents)
+                o, r, d, ep_ret, ep_len = reset_agent(env.agents[agent_index])
             previous_step_outputs[agent_index] = (o, r, d, ep_ret, ep_len)
 
         # Save model
@@ -402,6 +402,9 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
         # Perform PPO update!
         update()
+
+        # Reset all agents
+        previous_step_outputs = reset(env, num_agents)
 
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
@@ -431,9 +434,13 @@ def reset(env, num_agents):
     previous_step_outputs = []
     for agent_index in range(num_agents):
         agent = env.agents[agent_index]
-        previous_step_outputs.append((agent.reset(), 0, False, 0, 0))
+        previous_step_outputs.append(reset_agent(agent))
     env.reset()
     return previous_step_outputs
+
+
+def reset_agent(agent):
+    return agent.reset(), 0, False, 0, 0
 
 
 if __name__ == '__main__':
