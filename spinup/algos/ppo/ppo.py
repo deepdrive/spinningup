@@ -346,19 +346,23 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     start_time = time.time()
 
-    previous_step_outputs = reset(env, num_agents)
+    o, r, d = reset(env)
 
+    # TODO: Make multi-agent aware
     effective_horizon = round(1 / (1 - gamma))
-    effective_horizon_rewards = deque(maxlen=effective_horizon)
+    effective_horizon_rewards = []
+    for _ in range(num_agents):
+        effective_horizon_rewards.append(deque(maxlen=effective_horizon))
+
+    agent_index = env.agent_index
+    agent = env.agents[agent_index]
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         info = {}
         for t in range(local_steps_per_epoch):
-            agent_index = env.agent_index
-            o, r, d, ep_ret, ep_len = previous_step_outputs[agent_index]
-            a, v_t, logp_t = sess.run(get_action_ops,
-                                      feed_dict={x_ph: o.reshape(1, -1)})
+            a, v_t, logp_t = sess.run(
+                get_action_ops, feed_dict={x_ph: o.reshape(1, -1)})
 
             # save and log
             buf.store(o, a, r, v_t, logp_t, agent_index)
@@ -367,21 +371,26 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             if render:
                 env.render()
 
+            # NOTE: o,r,d,info is for the next agent (from its previous action)!
             o, r, d, info = env.step(a[0])
-
-            effective_horizon_rewards.append(r)
-            ep_ret += r
-            ep_len += 1
 
             if 'stats' in info and info['stats']:
                 logger.store(**info['stats'])
 
-            logger.store(horizon_return=sum(effective_horizon_rewards))
+            agent_index = env.agent_index
+            agent = env.agents[agent_index]
+
+            calc_effective_horizon_reward(
+                agent_index, effective_horizon_rewards, logger, r)
+
+            ep_len = agent.episode_steps
+            ep_ret = agent.episode_reward
 
             terminal = d or (ep_len == max_ep_len)
             if terminal or (t == local_steps_per_epoch - 1):
                 if not terminal:
-                    print('Warning: trajectory cut off by epoch at %d steps.' % ep_len)
+                    print('Warning: trajectory cut off by epoch at %d steps.' %
+                          ep_len)
                 # if trajectory didn't reach terminal state, bootstrap value target
                 last_val = r if d else sess.run(v, feed_dict={
                     x_ph: o.reshape(1, -1)})
@@ -389,8 +398,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
-                o, r, d, ep_ret, ep_len = reset_agent(env.agents[agent_index])
-            previous_step_outputs[agent_index] = (o, r, d, ep_ret, ep_len)
+                o, r, d = reset(env)
 
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs - 1):
@@ -398,13 +406,13 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
             # logger.save_state saves optimizer state which we don't want for
             # resuming purposes, so save model variables here separately
-            # save_scope('model', join(logger.output_dir, 'model_only/'), sess)
+            save_scope('model', join(logger.output_dir, 'model_only/'), sess)
 
         # Perform PPO update!
         update()
 
         # Reset all agents
-        previous_step_outputs = reset(env, num_agents)
+        reset(env)
 
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
@@ -421,7 +429,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('ClipFrac', average_only=True)
         logger.log_tabular('StopIter', average_only=True)
         logger.log_tabular('Time', time.time() - start_time)
-        logger.log_tabular('horizon_return', with_min_and_max=True)
+        logger.log_tabular('HorizonReturn', with_min_and_max=True)
 
         if 'stats' in info and info['stats']:
             for stat, value in info['stats'].items():
@@ -430,17 +438,18 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         logger.dump_tabular()
 
 
-def reset(env, num_agents):
-    previous_step_outputs = []
-    for agent_index in range(num_agents):
-        agent = env.agents[agent_index]
-        previous_step_outputs.append(reset_agent(agent))
-    env.reset()
-    return previous_step_outputs
+def calc_effective_horizon_reward(agent_index, effective_horizon_rewards,
+                                  logger, r):
+    ehr = effective_horizon_rewards[agent_index]
+    ehr.append(r)
+    logger.store(horizon_return=sum(ehr))
 
 
-def reset_agent(agent):
-    return agent.reset(), 0, False, 0, 0
+def reset(env):
+    """
+    :return: obs, reward, done
+    """
+    return env.reset(), 0, False
 
 
 if __name__ == '__main__':
