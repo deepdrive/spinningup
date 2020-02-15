@@ -137,7 +137,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97,
         max_ep_len=1000,
-        target_kl=0.01, logger_kwargs=dict(), save_freq=10, resume_path=None,
+        target_kl=0.01, logger_kwargs=dict(), save_freq=10, resume=None,
         reinitialize_optimizer_on_resume=True, render=False,
         **kwargs):
     """
@@ -210,7 +210,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
 
-        resume_path (str): Path to directory with simple_save model info
+        resume (str): Path to directory with simple_save model info
             you wish to resume from
 
         reinitialize_optimizer_on_resume: (bool) Whether to initialize
@@ -297,10 +297,10 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     sess.run(tf.global_variables_initializer())
 
     # Main outputs from computation graph
-    if resume_path is not None:
+    if resume is not None:
         from utils.test_policy import get_policy_model
         # Caution! We assume action space has not changed here.
-        saved_model, _ = get_policy_model(resume_path, sess)
+        saved_model, _ = get_policy_model(resume, sess)
         pi, logp, logp_pi, v = (saved_model['pi'], saved_model['logp'],
                                 saved_model['logp_pi'], saved_model['v'])
 
