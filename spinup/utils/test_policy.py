@@ -4,7 +4,9 @@ import os
 import os.path as osp
 import tensorflow as tf
 from spinup import EpochLogger
-from spinup.utils.logx import restore_tf_graph, restore_tf_graph_model_only
+from spinup.utils.logx import restore_tf_graph, restore_tf_graph_model_only, \
+    MODEL_ONLY_DIR
+
 
 
 def get_policy_model(fpath, sess, itr='last', use_model_only=True):
@@ -18,8 +20,9 @@ def get_policy_model(fpath, sess, itr='last', use_model_only=True):
 
     # load the things!
     if use_model_only:
+        # We need this to get the same agent performance on resume.
         model = restore_tf_graph_model_only(
-            sess, osp.join(fpath, 'model_only/'))
+            sess, osp.join(fpath, f'{MODEL_ONLY_DIR}/'))
     else:
         model = restore_tf_graph(sess, osp.join(fpath, 'simple_save'+itr))
 

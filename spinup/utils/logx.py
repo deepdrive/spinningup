@@ -6,6 +6,9 @@ Logs to a tab-separated-values file (path/to/output_directory/progress.txt)
 
 """
 import json
+from collections import deque
+from datetime import datetime
+from glob import glob
 from os.path import dirname, join
 
 import joblib
@@ -15,7 +18,10 @@ import tensorflow as tf
 import os.path as osp, time, atexit, os
 from spinup.utils.mpi_tools import proc_id, mpi_statistics_scalar
 from spinup.utils.serialization_utils import convert_json
-from spinup.utils.save_load_scope import load_scope
+from spinup.utils.save_load_scope import load_scope, save_scope
+
+SIMPLE_SAVE_DIR = 'simple_save'
+MODEL_ONLY_DIR = 'model_only'
 
 color2num = dict(
     gray=30,
@@ -93,13 +99,18 @@ def restore_tf_graph_model_only(sess, fpath):
     # that tf CAN actually extract.
 
     load_scope('model', fpath, sess)
-    model_info_dir = join(dirname(dirname(fpath)), 'simple_save')
+    model_info_dir = join(dirname(dirname(fpath)), SIMPLE_SAVE_DIR)
     model_info = joblib.load(osp.join(model_info_dir, 'model_info.pkl'))
     graph = tf.get_default_graph()
     model = dict()
     model.update({k: graph.get_tensor_by_name(v) for k,v in model_info['inputs'].items()})
     model.update({k: graph.get_tensor_by_name(v) for k,v in model_info['outputs'].items()})
     return model
+
+
+def get_date_str():
+    date_str = datetime.now().strftime('%Y_%m-%d_%H-%M.%S')
+    return date_str
 
 
 class Logger:
@@ -110,7 +121,9 @@ class Logger:
     state of a training run, and the trained model.
     """
 
-    def __init__(self, output_dir=None, output_fname='progress.txt', exp_name=None):
+    def __init__(self, output_dir=None, output_fname='progress.txt',
+                 exp_name=None, num_snapshots_to_keep=20,
+                 snapshot_save_freq_mins=30):
         """
         Initialize a Logger.
 
@@ -130,7 +143,12 @@ class Logger:
                 should give them all the same ``exp_name``.)
         """
         if proc_id()==0:
-            self.output_dir = output_dir or "/tmp/experiments/%i"%int(time.time())
+            if output_dir:
+                date_str = get_date_str()
+                self.output_dir = output_dir + '_' + date_str
+            else:
+                self.output_dir = "/tmp/experiments/%i"%int(time.time())
+            self.snapshots_dir = join(self.output_dir, 'snapshots')
             if osp.exists(self.output_dir):
                 print("Warning: Log dir %s already exists! Storing info there anyway."%self.output_dir)
             else:
@@ -141,10 +159,14 @@ class Logger:
         else:
             self.output_dir = None
             self.output_file = None
+            self.snapshots_dir = None
         self.first_row=True
         self.log_headers = []
         self.log_current_row = {}
         self.exp_name = exp_name
+        self.snapshot_save_freq_mins = snapshot_save_freq_mins
+        self.num_snapshots_to_keep = num_snapshots_to_keep
+        self.snapshots = deque(maxlen=num_snapshots_to_keep)
 
     def log(self, msg, color='green'):
         """Print a colorized message to stdout."""
@@ -222,6 +244,8 @@ class Logger:
                 self.log('Warning: could not pickle state_dict.', color='red')
             if hasattr(self, 'tf_saver_elements'):
                 self._tf_simple_save(itr)
+                self._save_model_only(itr)
+                self._save_snapshots()
 
     def setup_tf_saver(self, sess, inputs, outputs):
         """
@@ -253,7 +277,7 @@ class Logger:
         if proc_id() == 0:
             assert hasattr(self, 'tf_saver_elements'), \
                 "First have to setup saving with self.setup_tf_saver"
-            fpath = 'simple_save' + ('%d'%itr if itr is not None else '')
+            fpath = SIMPLE_SAVE_DIR + ('%d'%itr if itr is not None else '')
             fpath = osp.join(self.output_dir, fpath)
             if osp.exists(fpath):
                 # simple_save refuses to be useful if fpath already exists,
@@ -261,7 +285,38 @@ class Logger:
                 shutil.rmtree(fpath)
             tf.saved_model.simple_save(export_dir=fpath, **self.tf_saver_elements)
             joblib.dump(self.tf_saver_info, osp.join(fpath, 'model_info.pkl'))
-    
+
+    def _save_snapshots(self):
+        if proc_id() != 0 or not self.num_snapshots_to_keep:
+            return
+        now = time.time()
+        if not self.snapshots:
+            save_snapshot = True
+        else:
+            prev_time, _prev_dir = self.snapshots[-1]
+            save_snapshot = prev_time < (now - self.snapshot_save_freq_mins * 60)
+
+        if save_snapshot:
+            if len(self.snapshots) == self.snapshots.maxlen:
+                # Roll snapshots
+                _old_time, old_dir = self.snapshots.popleft()
+                shutil.rmtree(old_dir)
+
+            new_dir = join(self.snapshots_dir, get_date_str())
+            os.makedirs(new_dir)
+            curr_simple_save_dir = join(self.output_dir, SIMPLE_SAVE_DIR)
+            curr_model_only_dir = join(self.output_dir, MODEL_ONLY_DIR)
+            shutil.copytree(curr_simple_save_dir, join(new_dir, SIMPLE_SAVE_DIR))
+            shutil.copytree(curr_model_only_dir, join(new_dir, MODEL_ONLY_DIR))
+
+            self.snapshots.append((now, new_dir))
+
+    def _save_model_only(self, itr=None):
+        # logger.save_state saves optimizer state which we don't want for
+        # resuming purposes, so save model variables here separately
+        save_scope('model', join(self.output_dir, f'{MODEL_ONLY_DIR}/'),
+                   self.tf_saver_elements['session'])
+
     def dump_tabular(self):
         """
         Write all of the diagnostics from the current iteration.
