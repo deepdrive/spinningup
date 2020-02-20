@@ -456,7 +456,7 @@ def calc_effective_horizon_reward(agent_index, effective_horizon_rewards,
                                   logger, r):
     ehr = effective_horizon_rewards[agent_index]
     ehr.append(r)
-    logger.store(horizon_return=sum(ehr))
+    logger.store(HorizonReturn=sum(ehr))
 
 
 def reset(env):
