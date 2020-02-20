@@ -7,7 +7,7 @@ import tensorflow as tf
 import gym
 import time
 import spinup.algos.ppo.core as core
-from spinup.utils.logx import EpochLogger
+from spinup.utils.logx import EpochLogger, get_date_str
 from spinup.utils.mpi_tf import MpiAdamOptimizer, sync_all_params
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, \
     mpi_statistics_scalar, num_procs
@@ -417,6 +417,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', with_min_and_max=True)
+        logger.log_tabular('DateTime', get_date_str())
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('VVals', with_min_and_max=True)
         logger.log_tabular('TotalEnvInteracts', (epoch + 1) * steps_per_epoch)
