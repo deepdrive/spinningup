@@ -304,12 +304,14 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         pi, logp, logp_pi, v = (saved_model['pi'], saved_model['logp'],
                                 saved_model['logp_pi'], saved_model['v'])
 
-        if reinitialize_optimizer_on_resume:
-            # HACK to reinitialize our optimizer variables\
-            trainable_variables = tf.trainable_variables()
-            non_trainable_variables = [v for v in tf.global_variables()
-                                       if v not in trainable_variables]
-            sess.run(tf.variables_initializer(non_trainable_variables))
+        # It looks like the first update destroys performance when
+        # using this!
+        # if reinitialize_optimizer_on_resume:
+        #     # HACK to reinitialize our optimizer variables\
+        #     trainable_variables = tf.trainable_variables()
+        #     non_trainable_variables = [v for v in tf.global_variables()
+        #                                if v not in trainable_variables]
+        #     sess.run(tf.variables_initializer(non_trainable_variables))
 
     # Sync params across processes
     sess.run(sync_all_params())

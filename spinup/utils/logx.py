@@ -96,7 +96,9 @@ def restore_tf_graph_model_only(sess, fpath):
     # DOESN'T WORK - Still loads Adam variables, need reinitialize hack to
     # workaround. Keeping this, however, as it explicitly defines variables
     # to save via scope, and hopefully will help in the future with variables
-    # that tf CAN actually extract.
+    # that tf CAN actually extract. Also note that reinitializing Adam
+    # vars is not actually a good thing at least for the initial performance
+    # on resume. So said hack is disabled.
 
     load_scope('model', fpath, sess)
     model_info_dir = join(dirname(dirname(fpath)), SIMPLE_SAVE_DIR)
