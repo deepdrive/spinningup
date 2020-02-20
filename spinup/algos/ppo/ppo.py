@@ -462,6 +462,7 @@ def calc_effective_horizon_reward(agent_index, effective_horizon_rewards,
 
 def reset(env):
     """
+    Resets env on first call, after that resets/respawns the current agent
     :return: obs, reward, done
     """
     return env.reset(), 0, False
