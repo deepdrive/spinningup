@@ -27,6 +27,7 @@ class PPOBuffer:
 
     def __init__(self, obs_dim, act_dim, max_size, gamma=0.99, lam=0.95,
                  num_agents=1):
+        print(f'Max buffer size {max_size} - # agents {num_agents}')
         assert max_size % num_agents == 0
         n_size = max_size // num_agents
 
