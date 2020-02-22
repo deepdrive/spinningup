@@ -256,20 +256,9 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                                                env.action_space)
     adv_ph, ret_ph, logp_old_ph = core.placeholders(None, None, None)
 
-    # gpu_options = tf.GPUOptions(
-    #     per_process_gpu_memory_fraction=1/num_procs() - 0.1)
-
     sess = tf.Session(
         # config=tf.ConfigProto(log_device_placement=True)
         config=tf.ConfigProto(gpu_options=tf.GPUOptions(allow_growth=True)))
-    # 512 MB
-    # GPU:
-    # start update 2020-02-19 14:04:10.482
-    # end   update 2020-02-19 14:04:11.516
-    #
-    # CPU
-    # start update 2020-02-19 14:06:15.603
-    # end   update 2020-02-19 14:06:18.631
 
     pi, logp, logp_pi, v = actor_critic(x_ph, a_ph, **ac_kwargs)
 
