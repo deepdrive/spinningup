@@ -226,6 +226,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     """
 
     logger = EpochLogger(**logger_kwargs)
+    logger.add_key_stat('trip_pct')
+    logger.add_key_stat('HorizonReturn')
     logger.save_config(locals())
 
     seed += 10000 * proc_id()
@@ -302,9 +304,9 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     if resume is not None:
         from utils.test_policy import get_policy_model
         # Caution! We assume action space has not changed here.
-        saved_model, _ = get_policy_model(resume, sess)
-        pi, logp, logp_pi, v = (saved_model['pi'], saved_model['logp'],
-                                saved_model['logp_pi'], saved_model['v'])
+        should_save_model, _ = get_policy_model(resume, sess)
+        pi, logp, logp_pi, v = (should_save_model['pi'], should_save_model['logp'],
+                                should_save_model['logp_pi'], should_save_model['v'])
 
         # It looks like the first update destroys performance when
         # using this!
@@ -405,8 +407,10 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                 o, r, d = reset(env)
 
         # Save model
+        should_save_model = False
+        best_model = False
         if (epoch % save_freq == 0) or (epoch == epochs - 1):
-            logger.save_state({'env': env}, None)
+            should_save_model = True
 
         # Perform PPO update!
         update()
@@ -436,8 +440,14 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             for stat, value in info['stats'].items():
                 logger.log_tabular(stat, with_min_and_max=True)
 
-        logger.dump_tabular()
+        if logger.new_key_stat_record:
+            best_model = True
+            should_save_model = True
 
+        if should_save_model:
+            logger.save_state({'env': env}, None, is_best=best_model)
+
+        logger.dump_tabular()
 
 def calc_effective_horizon_reward(agent_index, effective_horizon_rewards,
                                   logger, r):

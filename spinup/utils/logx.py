@@ -124,7 +124,7 @@ class Logger:
     """
 
     def __init__(self, output_dir=None, output_fname='progress.txt',
-                 exp_name=None, num_snapshots_to_keep=20,
+                 exp_name=None, num_snapshots_to_keep=10,
                  snapshot_save_freq_mins=30):
         """
         Initialize a Logger.
@@ -150,7 +150,6 @@ class Logger:
                 self.output_dir = output_dir + '_' + date_str
             else:
                 self.output_dir = "/tmp/experiments/%i"%int(time.time())
-            self.snapshots_dir = join(self.output_dir, 'snapshots')
             if osp.exists(self.output_dir):
                 print("Warning: Log dir %s already exists! Storing info there anyway."%self.output_dir)
             else:
@@ -161,14 +160,22 @@ class Logger:
         else:
             self.output_dir = None
             self.output_file = None
-            self.snapshots_dir = None
         self.first_row=True
         self.log_headers = []
         self.log_current_row = {}
         self.exp_name = exp_name
         self.snapshot_save_freq_mins = snapshot_save_freq_mins
         self.num_snapshots_to_keep = num_snapshots_to_keep
-        self.snapshots = deque(maxlen=num_snapshots_to_keep)
+        self.best_model_snapshots = deque(maxlen=num_snapshots_to_keep)
+        self.timed_snapshots = deque(maxlen=num_snapshots_to_keep)
+
+        # Special stats that allow us to save models when new levels of
+        # performance are reached.
+        self.key_stats = {}
+        self.add_key_stat('EpRet')
+
+        # Track whether a new high value was encountered this iteration/epoch
+        self.new_key_stat_record = False
 
     def log(self, msg, color='green'):
         """Print a colorized message to stdout."""
@@ -217,7 +224,7 @@ class Logger:
             with open(osp.join(self.output_dir, "config.json"), 'w') as out:
                 out.write(output)
 
-    def save_state(self, state_dict, itr=None):
+    def save_state(self, state_dict, itr=None, is_best=False):
         """
         Saves the state of an experiment.
 
@@ -237,6 +244,9 @@ class Logger:
                 describe the current state of training.
 
             itr: An int, or None. Current iteration of training.
+
+            is_best: Whether this model's performance reached a new record high,
+                in which case we put it in a special folder
         """
         if proc_id()==0:
             fname = 'vars.pkl' if itr is None else 'vars%d.pkl'%itr
@@ -247,7 +257,7 @@ class Logger:
             if hasattr(self, 'tf_saver_elements'):
                 self._tf_simple_save(itr)
                 self._save_model_only(itr)
-                self._save_snapshots()
+                self._save_snapshots(is_best)
 
     def setup_tf_saver(self, sess, inputs, outputs):
         """
@@ -288,30 +298,37 @@ class Logger:
             tf.saved_model.simple_save(export_dir=fpath, **self.tf_saver_elements)
             joblib.dump(self.tf_saver_info, osp.join(fpath, 'model_info.pkl'))
 
-    def _save_snapshots(self):
+    def _save_snapshots(self, is_best=False):
         if proc_id() != 0 or not self.num_snapshots_to_keep:
             return
+
         now = time.time()
-        if not self.snapshots:
+        if is_best:
             save_snapshot = True
+            snapshots = self.best_model_snapshots
+            snapshots_dir = join(self.output_dir, 'best')
         else:
-            prev_time, _prev_dir = self.snapshots[-1]
-            save_snapshot = prev_time < (now - self.snapshot_save_freq_mins * 60)
+            snapshots = self.timed_snapshots
+            snapshots_dir = join(self.output_dir, 'snapshots')
+            if not self.timed_snapshots:
+                save_snapshot = True
+            else:
+                prev_time, _prev_dir = self.timed_snapshots[-1]
+                save_snapshot = prev_time < (now - self.snapshot_save_freq_mins * 60)
 
         if save_snapshot:
-            if len(self.snapshots) == self.snapshots.maxlen:
+            if len(snapshots) == snapshots.maxlen:
                 # Roll snapshots
-                _old_time, old_dir = self.snapshots.popleft()
+                _old_time, old_dir = snapshots.popleft()
                 shutil.rmtree(old_dir)
-
-            new_dir = join(self.snapshots_dir, get_date_str())
+            new_dir = join(snapshots_dir, get_date_str())
             os.makedirs(new_dir)
             curr_simple_save_dir = join(self.output_dir, SIMPLE_SAVE_DIR)
             curr_model_only_dir = join(self.output_dir, MODEL_ONLY_DIR)
             shutil.copytree(curr_simple_save_dir, join(new_dir, SIMPLE_SAVE_DIR))
             shutil.copytree(curr_model_only_dir, join(new_dir, MODEL_ONLY_DIR))
 
-            self.snapshots.append((now, new_dir))
+            snapshots.append((now, new_dir))
 
     def _save_model_only(self, itr=None):
         # logger.save_state saves optimizer state which we don't want for
@@ -346,6 +363,26 @@ class Logger:
                 self.output_file.flush()
         self.log_current_row.clear()
         self.first_row=False
+
+    def track_key_stats(self, key, stats):
+        if key in self.key_stats:
+            if len(stats) == 2:
+                print('Key stats need min and max values!')
+            else:
+                # TODO: Name the model folder after the stat that was best
+                mean, std, global_min, global_max = stats
+                curr_stat = self.key_stats[key]
+                if mean > curr_stat['best_avg']:
+                    curr_stat['best_avg'] = mean
+                    self.new_key_stat_record = True
+                elif global_max > curr_stat['best']:
+                    curr_stat['best'] = global_max
+                    self.new_key_stat_record = True
+
+    def add_key_stat(self, key):
+        assert key not in self.key_stats, f'Key {key} already added'
+        self.key_stats = {key: {'best': -np.inf, 'best_avg': -np.inf}}
+
 
 class EpochLogger(Logger):
     """
@@ -415,7 +452,7 @@ class EpochLogger(Logger):
             super().log_tabular(key,val)
         else:
             if key not in self.epoch_dict:
-                return
+                return False
             v = self.epoch_dict[key]
             vals = np.concatenate(v) if isinstance(v[0], np.ndarray) and len(v[0].shape)>0 else v
             stats = mpi_statistics_scalar(vals, with_min_and_max=with_min_and_max)
@@ -425,6 +462,7 @@ class EpochLogger(Logger):
             if with_min_and_max:
                 super().log_tabular('Max'+key, stats[3])
                 super().log_tabular('Min'+key, stats[2])
+            self.track_key_stats(key, stats)
         self.epoch_dict[key] = []
 
     def get_stats(self, key):
