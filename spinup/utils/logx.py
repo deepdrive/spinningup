@@ -143,6 +143,17 @@ class Logger:
                 will know to group them. (Use case: if you run the same
                 hyperparameter configuration with multiple random seeds, you
                 should give them all the same ``exp_name``.)
+
+            num_snapshots_to_keep (int): Number of recent
+                model snapshots to retain. Older snapshots are deleted after
+                this number of snapshots are stored.
+
+             snapshot_save_freq (int): We'll save a new snapshot if save_state
+                is called and the previous snapshot is more than
+                snapshot_save_freq minutes old.
+
+            logger (YourLoggerObj): Optional logger object that can be passed
+                from your env, for example, to keep all logs in the same file.
         """
         self.logger = logger
         if proc_id()==0:
@@ -167,16 +178,25 @@ class Logger:
         self.exp_name = exp_name
         self.snapshot_save_freq_mins = snapshot_save_freq_mins
         self.num_snapshots_to_keep = num_snapshots_to_keep
-        self.best_model_snapshots = deque(maxlen=num_snapshots_to_keep)
+        self.best_model_snapshots = {}
         self.timed_snapshots = deque(maxlen=num_snapshots_to_keep)
 
         # Special stats that allow us to save models when new levels of
-        # performance are reached.
+        # performance are reached. Note that insertion order matters, so
+        # if a new high is achieved in two key stats, the model will be
+        # saved under the first key stat's folder.
         self.key_stats = {}
         self.add_key_stat('EpRet')
 
         # Track whether a new high value was encountered this iteration/epoch
-        self.new_key_stat_record = False
+        # and if so, in which category, i.e. EpRet
+        self.best_category = ''
+
+    def say(self, msg):
+        if self.logger:
+            self.logger.info(msg)
+        else:
+            print(msg)
 
     def log(self, msg, color='green'):
         """Print a colorized message to stdout."""
@@ -225,7 +245,7 @@ class Logger:
             with open(osp.join(self.output_dir, "config.json"), 'w') as out:
                 out.write(output)
 
-    def save_state(self, state_dict, itr=None, is_best=False):
+    def save_state(self, state_dict, itr=None, best_category=''):
         """
         Saves the state of an experiment.
 
@@ -246,8 +266,10 @@ class Logger:
 
             itr: An int, or None. Current iteration of training.
 
-            is_best: Whether this model's performance reached a new record high,
-                in which case we put it in a special folder
+            best_category: Category where this model's performance reached a
+                new record high, i.e. EpRet, in which case we put it in a
+                special folder.
+
         """
         if proc_id()==0:
             fname = 'vars.pkl' if itr is None else 'vars%d.pkl'%itr
@@ -258,7 +280,7 @@ class Logger:
             if hasattr(self, 'tf_saver_elements'):
                 self._tf_simple_save(itr)
                 self._save_model_only(itr)
-                self._save_snapshots(is_best)
+                self._save_snapshots(best_category)
 
     def setup_tf_saver(self, sess, inputs, outputs):
         """
@@ -299,15 +321,15 @@ class Logger:
             tf.saved_model.simple_save(export_dir=fpath, **self.tf_saver_elements)
             joblib.dump(self.tf_saver_info, osp.join(fpath, 'model_info.pkl'))
 
-    def _save_snapshots(self, is_best=False):
+    def _save_snapshots(self, best_category=''):
         if proc_id() != 0 or not self.num_snapshots_to_keep:
             return
 
         now = time.time()
-        if is_best:
+        if best_category:
             save_snapshot = True
-            snapshots = self.best_model_snapshots
-            snapshots_dir = join(self.output_dir, 'best')
+            snapshots = self.best_model_snapshots[best_category]
+            snapshots_dir = join(self.output_dir, f'best_{best_category}')
         else:
             snapshots = self.timed_snapshots
             snapshots_dir = join(self.output_dir, 'snapshots')
@@ -364,6 +386,7 @@ class Logger:
                 self.output_file.flush()
         self.log_current_row.clear()
         self.first_row=False
+        self.best_category = ''
 
     def track_key_stats(self, key, stats):
         if key in self.key_stats:
@@ -375,14 +398,15 @@ class Logger:
                 curr_stat = self.key_stats[key]
                 if mean > curr_stat['best_avg']:
                     curr_stat['best_avg'] = mean
-                    self.new_key_stat_record = True
-                elif global_max > curr_stat['best']:
+                    self.best_category = self.best_category or key
+                if global_max > curr_stat['best']:
                     curr_stat['best'] = global_max
-                    self.new_key_stat_record = True
+                    self.best_category = self.best_category or key
 
     def add_key_stat(self, key):
         assert key not in self.key_stats, f'Key {key} already added'
-        self.key_stats = {key: {'best': -np.inf, 'best_avg': -np.inf}}
+        self.key_stats[key] = {'best': -np.inf, 'best_avg': -np.inf}
+        self.best_model_snapshots[key] = deque(maxlen=self.num_snapshots_to_keep)
 
 
 class EpochLogger(Logger):

@@ -445,12 +445,12 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             for stat, value in info['stats'].items():
                 logger.log_tabular(stat, with_min_and_max=True)
 
-        if logger.new_key_stat_record:
+        if logger.best_category:
             best_model = True
             should_save_model = True
 
         if should_save_model:
-            logger.save_state({'env': env}, None, is_best=best_model)
+            logger.save_state({'env': env}, None, best_category=logger.best_category)
 
         logger.dump_tabular()
 
