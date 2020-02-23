@@ -19,6 +19,7 @@ setup(
         'gym[atari,box2d,classic_control]>=0.10.8',
         'ipython',
         'joblib',
+        'loguru',
         'matplotlib',
         'mpi4py',
         'numpy',
@@ -28,7 +29,7 @@ setup(
         'scipy',
         'seaborn',
         'tensorflow>=1.8.0,<2.0',
-        'tqdm'
+        'tqdm',
     ],
     extras_require={'mujoco': 'mujoco-py<2.1,>=2.0'},
     description="Teaching tools for introducing people to deep RL.",

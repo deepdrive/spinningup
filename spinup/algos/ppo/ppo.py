@@ -224,11 +224,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             to carry over
 
     """
-
-    logger = EpochLogger(**logger_kwargs)
-    logger.add_key_stat('trip_pct')
-    logger.add_key_stat('HorizonReturn')
-    logger.save_config(locals())
+    config = locals()
 
     seed += 10000 * proc_id()
     tf.set_random_seed(seed)
@@ -241,6 +237,15 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     env = env_fn()
 
     num_agents = env.num_agents
+
+    if hasattr(env.unwrapped, 'logger'):
+        print('Logger set by environment')
+        logger_kwargs['logger'] = env.unwrapped.logger
+
+    logger = EpochLogger(**logger_kwargs)
+    logger.add_key_stat('trip_pct')
+    logger.add_key_stat('HorizonReturn')
+    logger.save_config(config)
 
     if hasattr(env.unwrapped, 'gamma'):
         logger.log(f'Gamma set by environment to {env.unwrapped.gamma}.'

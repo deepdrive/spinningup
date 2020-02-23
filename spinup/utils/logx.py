@@ -125,7 +125,7 @@ class Logger:
 
     def __init__(self, output_dir=None, output_fname='progress.txt',
                  exp_name=None, num_snapshots_to_keep=10,
-                 snapshot_save_freq_mins=30):
+                 snapshot_save_freq_mins=30, logger=None):
         """
         Initialize a Logger.
 
@@ -144,6 +144,7 @@ class Logger:
                 hyperparameter configuration with multiple random seeds, you
                 should give them all the same ``exp_name``.)
         """
+        self.logger = logger
         if proc_id()==0:
             if output_dir:
                 date_str = get_date_str()
@@ -151,12 +152,12 @@ class Logger:
             else:
                 self.output_dir = "/tmp/experiments/%i"%int(time.time())
             if osp.exists(self.output_dir):
-                print("Warning: Log dir %s already exists! Storing info there anyway."%self.output_dir)
+                self.say("Warning: Log dir %s already exists! Storing info there anyway."%self.output_dir)
             else:
                 os.makedirs(self.output_dir)
             self.output_file = open(osp.join(self.output_dir, output_fname), 'w')
             atexit.register(self.output_file.close)
-            print(colorize("Logging data to %s"%self.output_file.name, 'green', bold=True))
+            self.say(colorize("Logging data to %s"%self.output_file.name, 'green', bold=True))
         else:
             self.output_dir = None
             self.output_file = None
@@ -180,7 +181,7 @@ class Logger:
     def log(self, msg, color='green'):
         """Print a colorized message to stdout."""
         if proc_id()==0:
-            print(colorize(msg, color, bold=True))
+            self.say(colorize(msg, color, bold=True))
 
     def log_tabular(self, key, val):
         """
@@ -219,8 +220,8 @@ class Logger:
             config_json['exp_name'] = self.exp_name
         if proc_id()==0:
             output = json.dumps(config_json, separators=(',',':\t'), indent=4, sort_keys=True)
-            print(colorize('Saving config:\n', color='cyan', bold=True))
-            print(output)
+            self.say(colorize('Saving config:\n', color='cyan', bold=True))
+            self.say(output)
             with open(osp.join(self.output_dir, "config.json"), 'w') as out:
                 out.write(output)
 
@@ -349,13 +350,13 @@ class Logger:
             keystr = '%'+'%d'%max_key_len
             fmt = "| " + keystr + "s | %15s |"
             n_slashes = 22 + max_key_len
-            print("-"*n_slashes)
+            self.say("-"*n_slashes)
             for key in self.log_headers:
                 val = self.log_current_row.get(key, "")
                 valstr = "%8.3g"%val if hasattr(val, "__float__") else val
-                print(fmt%(key, valstr))
+                self.say(fmt%(key, valstr))
                 vals.append(val)
-            print("-"*n_slashes)
+            self.say("-"*n_slashes)
             if self.output_file is not None:
                 if self.first_row:
                     self.output_file.write("\t".join(self.log_headers)+"\n")
@@ -367,7 +368,7 @@ class Logger:
     def track_key_stats(self, key, stats):
         if key in self.key_stats:
             if len(stats) == 2:
-                print('Key stats need min and max values!')
+                self.say('Key stats need min and max values!')
             else:
                 # TODO: Name the model folder after the stat that was best
                 mean, std, global_min, global_max = stats
@@ -423,7 +424,7 @@ class EpochLogger(Logger):
         for k, v in kwargs.items():
             if not is_number(v):
                 pass
-                # print(f'warning - value for {k} is not a number: {v}')
+                # self.say(f'warning - value for {k} is not a number: {v}')
             else:
                 if not(k in self.epoch_dict.keys()):
                     self.epoch_dict[k] = []
