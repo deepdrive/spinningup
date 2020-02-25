@@ -12,7 +12,7 @@ from textwrap import dedent
 
 # Register custom envs
 import gym_match_input_continuous
-import deepdrive_2d
+import deepdrive_zero
 
 
 # Command line args that will go to ExperimentGrid.run, and must possess unique

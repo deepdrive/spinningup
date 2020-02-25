@@ -141,7 +141,7 @@ def sac(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     # Register custom envs
     import gym_match_input_continuous
-    import deepdrive_2d
+    import deepdrive_zero
 
     env, test_env = env_fn(), env_fn()
     obs_dim = env.observation_space.shape[0]
