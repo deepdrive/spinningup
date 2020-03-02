@@ -236,7 +236,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     env = env_fn()
 
-    num_agents = env.num_agents
+    num_agents = getattr(env, 'num_agents', 1)
 
     if hasattr(env.unwrapped, 'logger'):
         print('Logger set by environment')
@@ -278,7 +278,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
     # Experience buffer
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
     buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam,
-                    env.num_agents)
+                    num_agents)
 
     # Count variables
     var_counts = tuple(core.count_vars(scope) for scope in ['pi', 'v'])
