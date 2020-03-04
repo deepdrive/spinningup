@@ -13,6 +13,7 @@ from spinup.utils.mpi_tf import MpiAdamOptimizer, sync_all_params
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 from spinup.utils.save_load_scope import save_scope
 
+
 class PPOBuffer:
     """
     A buffer for storing trajectories experienced by a PPO agent interacting
@@ -129,7 +130,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97,
         max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10, resume=None,
-        reinitialize_optimizer_on_resume=True, render=False,
+        reinitialize_optimizer_on_resume=True, render=False, notes='',
         **kwargs):
     """
     Proximal Policy Optimization (by clipping),
@@ -215,6 +216,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         render: (bool) Whether to render the env during training. Useful for
             checking that resumption of training caused visual performance
             to carry over
+
+        notes: (str) Experimental notes on what this run is testing
     """
     config = locals()
 
@@ -298,7 +301,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
     # Main outputs from computation graph
     if resume is not None:
-        from utils.test_policy import get_policy_model
+        from spinup.utils.test_policy import get_policy_model
         # Caution! We assume action space has not changed here.
         should_save_model, _ = get_policy_model(resume, sess)
         pi, logp, logp_pi, v = (should_save_model['pi'], should_save_model['logp'],
@@ -365,15 +368,16 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             if render:
                 env.render()
 
-            # NOTE: o2,d2,info2 is for the next agent (from its previous action)!
-            o2, r, d2, info2 = env.step(a[0])
+            # NOTE: steps current agent, but returns values for next agent (from its previous action)!
+            # TODO: Just return multiple agents observations
+            o_prev, r_prev, d_prev, info_prev = env.step(a[0])
 
             # save and log
-            buf.store(o, a, r, v_t, logp_t, agent_index)
+            buf.store(o, a, env.curr_reward, v_t, logp_t, agent_index)
             logger.store(VVals=v_t)
 
             # Update obs (critical!)
-            o, d, info = o2, d2, info2
+            o, r, d, info = o_prev, r_prev, d_prev, info_prev
 
             if 'stats' in info and info['stats']:
                 logger.store(**info['stats'])
@@ -388,7 +392,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             ep_ret = agent.episode_reward
 
             terminal = d or (ep_len == max_ep_len)
-            if terminal or (t==local_steps_per_epoch-1):
+            if terminal or (t == local_steps_per_epoch-1):
                 if not terminal:
                     print('Warning: trajectory cut off by epoch at %d steps.'%ep_len)
                 # if trajectory didn't reach terminal state, bootstrap value target
