@@ -1,7 +1,6 @@
-import sys
-from os.path import join
-
+from os.path import join, dirname, realpath
 from setuptools import setup
+import sys
 
 assert sys.version_info.major == 3 and sys.version_info.minor >= 6, \
     "The Spinning Up repo is designed to work with Python 3.6 and greater." \
@@ -15,12 +14,12 @@ setup(
     py_modules=['spinup'],
     version=__version__,#'0.1',
     install_requires=[
-        'cloudpickle',
-        'gym[atari,box2d,classic_control]>=0.10.8',
+        'cloudpickle==1.2.1',
+        'gym[atari,box2d,classic_control]~=0.15.3',
         'ipython',
         'joblib',
+        'matplotlib==3.1.1',
         'loguru',
-        'matplotlib',
         'mpi4py',
         'numpy',
         'pandas',
@@ -29,9 +28,9 @@ setup(
         'scipy',
         'seaborn',
         'tensorflow>=1.8.0,<2.0',
-        'tqdm',
+        'torch==1.3.1',
+        'tqdm'
     ],
-    extras_require={'mujoco': 'mujoco-py<2.1,>=2.0'},
     description="Teaching tools for introducing people to deep RL.",
     author="Joshua Achiam",
 )

@@ -15,13 +15,15 @@ import joblib
 import shutil
 import numpy as np
 import tensorflow as tf
+import torch
 import os.path as osp, time, atexit, os
+import warnings
 from spinup.utils.mpi_tools import proc_id, mpi_statistics_scalar
 from spinup.utils.serialization_utils import convert_json
 from spinup.utils.save_load_scope import load_scope, save_scope
 
-SIMPLE_SAVE_DIR = 'simple_save'
-MODEL_ONLY_DIR = 'model_only'
+SIMPLE_SAVE_DIR = 'simple_save_tf1'
+MODEL_ONLY_DIR = 'model_only_tf1'
 
 color2num = dict(
     gray=30,
@@ -47,7 +49,6 @@ def colorize(string, color, bold=False, highlight=False):
     attr.append(str(num))
     if bold: attr.append('1')
     return '\x1b[%sm%s\x1b[0m' % (';'.join(attr), string)
-
 
 def restore_tf_graph(sess, fpath):
     """
@@ -192,11 +193,11 @@ class Logger:
         # and if so, in which category, i.e. EpRet
         self.best_category = ''
 
-    def say(self, msg):
+    def say(self, msg, **print_kwargs):
         if self.logger:
             self.logger.info(msg)
         else:
-            print(msg)
+            print(msg, **print_kwargs)
 
     def log(self, msg, color='green'):
         """Print a colorized message to stdout."""
@@ -281,6 +282,9 @@ class Logger:
                 self._tf_simple_save(itr)
                 self._save_model_only(itr)
                 self._save_snapshots(best_category)
+            if hasattr(self, 'pytorch_saver_elements'):
+                self._pytorch_simple_save(itr)
+                # TODO: Implement pytorch save_model_only and save_snapshots
 
     def setup_tf_saver(self, sess, inputs, outputs):
         """
@@ -359,6 +363,48 @@ class Logger:
         save_scope('model', join(self.output_dir, f'{MODEL_ONLY_DIR}/'),
                    self.tf_saver_elements['session'])
 
+
+    def setup_pytorch_saver(self, what_to_save):
+        """
+        Set up easy model saving for a single PyTorch model.
+
+        Because PyTorch saving and loading is especially painless, this is
+        very minimal; we just need references to whatever we would like to
+        pickle. This is integrated into the logger because the logger
+        knows where the user would like to save information about this
+        training run.
+
+        Args:
+            what_to_save: Any PyTorch model or serializable object containing
+                PyTorch models.
+        """
+        self.pytorch_saver_elements = what_to_save
+
+    def _pytorch_simple_save(self, itr=None):
+        """
+        Saves the PyTorch model (or models).
+        """
+        if proc_id()==0:
+            assert hasattr(self, 'pytorch_saver_elements'), \
+                "First have to setup saving with self.setup_pytorch_saver"
+            fpath = 'pyt_save'
+            fpath = osp.join(self.output_dir, fpath)
+            fname = 'model' + ('%d'%itr if itr is not None else '') + '.pt'
+            fname = osp.join(fpath, fname)
+            os.makedirs(fpath, exist_ok=True)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                # We are using a non-recommended way of saving PyTorch models,
+                # by pickling whole objects (which are dependent on the exact
+                # directory structure at the time of saving) as opposed to
+                # just saving network weights. This works sufficiently well
+                # for the purposes of Spinning Up, but you may want to do
+                # something different for your personal PyTorch project.
+                # We use a catch_warnings() context to avoid the warnings about
+                # not being able to save the source code.
+                torch.save(self.pytorch_saver_elements, fname)
+
+
     def dump_tabular(self):
         """
         Write all of the diagnostics from the current iteration.
@@ -378,7 +424,7 @@ class Logger:
                 valstr = "%8.3g"%val if hasattr(val, "__float__") else val
                 self.say(fmt%(key, valstr))
                 vals.append(val)
-            self.say("-"*n_slashes)
+            self.say("-"*n_slashes, flush=True)
             if self.output_file is not None:
                 if self.first_row:
                     self.output_file.write("\t".join(self.log_headers)+"\n")
