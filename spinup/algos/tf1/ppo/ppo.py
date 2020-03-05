@@ -1,5 +1,6 @@
 import math
 from collections import deque
+from copy import deepcopy
 from os.path import join
 
 import numpy as np
@@ -7,6 +8,7 @@ import tensorflow as tf
 import gym
 import time
 import spinup.algos.tf1.ppo.core as core
+from spinup.utils.custom_envs import import_custom_envs
 from spinup.utils.logx import EpochLogger, get_date_str
 from spinup.utils.logx import EpochLogger
 from spinup.utils.mpi_tf import MpiAdamOptimizer, sync_all_params
@@ -219,16 +221,13 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
 
         notes: (str) Experimental notes on what this run is testing
     """
-    config = locals()
+    config = deepcopy(locals())
 
     seed += 10000 * proc_id()
     tf.set_random_seed(seed)
     np.random.seed(seed)
 
-    # Register custom envs
-    # TODO: Read env.imports or something for this so we don't break other envs
-    import gym_match_input_continuous
-    import deepdrive_zero
+    import_custom_envs()
 
     env = env_fn()
 
@@ -308,7 +307,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                                 should_save_model['logp_pi'], should_save_model['v'])
 
         # It looks like the first update destroys performance when
-        # using this!
+        # using this! But network can eventually recover and achieve better perf.
         # if reinitialize_optimizer_on_resume:
         #     # HACK to reinitialize our optimizer variables\
         #     trainable_variables = tf.trainable_variables()
@@ -368,7 +367,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             if render:
                 env.render()
 
-            # NOTE: steps current agent, but returns values for next agent (from its previous action)!
+            # NOTE: For multi-agent, steps current agent,
+            # but returns values for next agent (from its previous action)!
             # TODO: Just return multiple agents observations
             o_prev, r_prev, d_prev, info_prev = env.step(a[0])
 

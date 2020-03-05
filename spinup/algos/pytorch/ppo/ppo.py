@@ -1,9 +1,12 @@
+from copy import deepcopy
+
 import numpy as np
 import torch
 from torch.optim import Adam
 import gym
 import time
 import spinup.algos.pytorch.ppo.core as core
+from spinup.utils.custom_envs import import_custom_envs
 from spinup.utils.logx import EpochLogger
 from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
@@ -16,30 +19,44 @@ class PPOBuffer:
     for calculating the advantages of state-action pairs.
     """
 
-    def __init__(self, obs_dim, act_dim, size, gamma=0.99, lam=0.95):
-        self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
-        self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
-        self.adv_buf = np.zeros(size, dtype=np.float32)
-        self.rew_buf = np.zeros(size, dtype=np.float32)
-        self.ret_buf = np.zeros(size, dtype=np.float32)
-        self.val_buf = np.zeros(size, dtype=np.float32)
-        self.logp_buf = np.zeros(size, dtype=np.float32)
-        self.gamma, self.lam = gamma, lam
-        self.ptr, self.path_start_idx, self.max_size = 0, 0, size
+    def __init__(self, obs_dim, act_dim, max_size, gamma=0.99, lam=0.95,
+                 num_agents=1):
+        print(f'Max buffer size {max_size} - # agents {num_agents}')
+        assert max_size % num_agents == 0
+        n_size = max_size // num_agents
 
-    def store(self, obs, act, rew, val, logp):
+        self.obs_buf = np.zeros(core.combined_shape(num_agents, core.combined_shape(n_size, obs_dim)), dtype=np.float32)
+        self.act_buf = np.zeros(core.combined_shape(num_agents, core.combined_shape(n_size, act_dim)), dtype=np.float32)
+        self.adv_buf = np.zeros((num_agents, n_size), dtype=np.float32)
+        self.rew_buf = np.zeros((num_agents, n_size), dtype=np.float32)
+        self.ret_buf = np.zeros((num_agents, n_size), dtype=np.float32)
+        self.val_buf = np.zeros((num_agents, n_size), dtype=np.float32)
+        self.logp_buf = np.zeros((num_agents, n_size), dtype=np.float32)
+        self.gamma = gamma
+        self.lam = lam
+        self.num_agents = num_agents
+        self.ptr = np.zeros((num_agents,), dtype=np.int)
+        self.path_start_idx = np.zeros((num_agents,), dtype=np.int)
+        self.size = 0
+        self.max_size = max_size
+        self.n_size = n_size
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim
+
+    def store(self, obs, act, rew, val, logp, agent_index):
         """
         Append one timestep of agent-environment interaction to the buffer.
         """
-        assert self.ptr < self.max_size     # buffer has to have room so you can store
-        self.obs_buf[self.ptr] = obs
-        self.act_buf[self.ptr] = act
-        self.rew_buf[self.ptr] = rew
-        self.val_buf[self.ptr] = val
-        self.logp_buf[self.ptr] = logp
-        self.ptr += 1
+        assert self.size < self.max_size  # buffer has to have room so you can store
+        self.obs_buf[agent_index][self.ptr[agent_index]] = obs
+        self.act_buf[agent_index][self.ptr[agent_index]] = act
+        self.rew_buf[agent_index][self.ptr[agent_index]] = rew
+        self.val_buf[agent_index][self.ptr[agent_index]] = val
+        self.logp_buf[agent_index][self.ptr[agent_index]] = logp
+        self.ptr[agent_index] += 1
+        self.size += 1
 
-    def finish_path(self, last_val=0):
+    def finish_path(self, agent_index, last_val=0):
         """
         Call this at the end of a trajectory, or when one gets cut off
         by an epoch ending. This looks back in the buffer to where the
@@ -55,18 +72,22 @@ class PPOBuffer:
         for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
         """
 
-        path_slice = slice(self.path_start_idx, self.ptr)
-        rews = np.append(self.rew_buf[path_slice], last_val)
-        vals = np.append(self.val_buf[path_slice], last_val)
-        
+        i = agent_index
+
+        path_slice = slice(self.path_start_idx[i], self.ptr[i])
+        rews = np.append(self.rew_buf[i][path_slice], last_val)
+        vals = np.append(self.val_buf[i][path_slice], last_val)
+
         # the next two lines implement GAE-Lambda advantage calculation
         deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
-        self.adv_buf[path_slice] = core.discount_cumsum(deltas, self.gamma * self.lam)
-        
+        self.adv_buf[i][path_slice] = core.discount_cumsum(
+            deltas, self.gamma * self.lam)
+
         # the next line computes rewards-to-go, to be targets for the value function
-        self.ret_buf[path_slice] = core.discount_cumsum(rews, self.gamma)[:-1]
-        
-        self.path_start_idx = self.ptr
+        self.ret_buf[i][path_slice] = core.discount_cumsum(rews, self.gamma)[
+                                      :-1]
+
+        self.path_start_idx[i] = self.ptr[i]
 
     def get(self):
         """
@@ -74,13 +95,27 @@ class PPOBuffer:
         the buffer, with advantages appropriately normalized (shifted to have
         mean zero and std one). Also, resets some pointers in the buffer.
         """
-        assert self.ptr == self.max_size    # buffer has to be full before you can get
-        self.ptr, self.path_start_idx = 0, 0
+        assert self.size == self.max_size  # buffer has to be full before you can get
+
+        # Reset pointers so next epoch overwrites buffers
+        self.size = 0
+        self.ptr = np.zeros((self.num_agents,), dtype=np.int)
+        self.path_start_idx = np.zeros((self.num_agents,), dtype=np.int)
+
+        # Concatenate agents' episodes
+        obs_buf = self.obs_buf.reshape(core.combined_shape(self.num_agents * self.n_size, self.obs_dim))
+        act_buf = self.act_buf.reshape(core.combined_shape(self.num_agents * self.n_size, self.act_dim))
+        ret_buf = self.ret_buf.flatten()
+        logp_buf = self.logp_buf.flatten()
+        adv_buf = self.adv_buf.flatten()
+
         # the next two lines implement the advantage normalization trick
-        adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
-        self.adv_buf = (self.adv_buf - adv_mean) / adv_std
-        data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
-                    adv=self.adv_buf, logp=self.logp_buf)
+        adv_mean, adv_std = mpi_statistics_scalar(adv_buf)
+        adv_buf = (adv_buf - adv_mean) / adv_std
+        data = dict(obs=obs_buf, act=act_buf, ret=ret_buf,
+                    adv=adv_buf, logp=logp_buf)
+
+        # TODO: See if we are copying below if we run into memory issues
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
 
 
@@ -88,7 +123,9 @@ class PPOBuffer:
 def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
         steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
-        target_kl=0.01, logger_kwargs=dict(), save_freq=10):
+        target_kl=0.01, logger_kwargs=dict(), save_freq=10, resume=None,
+        reinitialize_optimizer_on_resume=True, render=False, notes='',
+        **kwargs):
     """
     Proximal Policy Optimization (by clipping), 
 
@@ -190,24 +227,47 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
 
+        resume (str): Path to directory with simple_save model info
+            you wish to resume from
+
+        reinitialize_optimizer_on_resume: (bool) Whether to initialize
+            non-trainable variables in the tensorflow graph such as Adam
+            state
+
+        render: (bool) Whether to render the env during training. Useful for
+            checking that resumption of training caused visual performance
+            to carry over
+
+        notes: (str) Experimental notes on what this run is testing
+
     """
+    config = deepcopy(locals())
 
     # Special function to avoid certain slowdowns from PyTorch + MPI combo.
     setup_pytorch_for_mpi()
-
-    # Set up logger and save configuration
-    logger = EpochLogger(**logger_kwargs)
-    logger.save_config(locals())
 
     # Random seed
     seed += 10000 * proc_id()
     torch.manual_seed(seed)
     np.random.seed(seed)
 
+    import_custom_envs()
+
     # Instantiate environment
     env = env_fn()
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
+
+    num_agents = getattr(env, 'num_agents', 1)
+
+    if hasattr(env.unwrapped, 'logger'):
+        print('Logger set by environment')
+        logger_kwargs['logger'] = env.unwrapped.logger
+
+    logger = EpochLogger(**logger_kwargs)
+    logger.add_key_stat('trip_pct')
+    logger.add_key_stat('HorizonReturn')
+    logger.save_config(config)
 
     # Create actor-critic module
     ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
@@ -221,7 +281,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up experience buffer
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
-    buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
+    buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam, num_agents)
 
     # Set up function for computing PPO policy loss
     def compute_loss_pi(data):
@@ -250,6 +310,16 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up optimizers for policy and value function
     pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
     vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
+
+    # Main outputs from computation graph
+    if resume is not None:
+        # TODO: Below is TF resume, get this working for pytorch
+        # from spinup.utils.test_policy import get_policy_model
+        # # Caution! We assume action space has not changed here.
+        # should_save_model, _ = get_policy_model(resume, sess)
+        # pi, logp, logp_pi, v = (should_save_model['pi'], should_save_model['logp'],
+        #                         should_save_model['logp_pi'], should_save_model['v'])
+        pass
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
@@ -292,41 +362,60 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Prepare for interaction with environment
     start_time = time.time()
-    o, ep_ret, ep_len = env.reset(), 0, 0
+    o, r, d = reset(env)
+
+    agent_index = env.agent_index
+    agent = env.agents[agent_index]
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for t in range(local_steps_per_epoch):
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
 
-            next_o, r, d, _ = env.step(a)
-            ep_ret += r
-            ep_len += 1
+            if render:
+                env.render()
+
+            # NOTE: For multi-agent, steps current agent,
+            # but returns values for next agent (from its previous action)!
+            # TODO: Just return multiple agents observations
+            o_prev, r_prev, d_prev, info_prev = env.step(a)
+            # next_o, r, d, _ = env.step(a)
 
             # save and log
-            buf.store(o, a, r, v, logp)
+            buf.store(o, a, env.curr_reward, v, logp, agent_index)
             logger.store(VVals=v)
-            
+
             # Update obs (critical!)
-            o = next_o
+            o, r, d, info = o_prev, r_prev, d_prev, info_prev
+
+            if 'stats' in info and info['stats']:  # TODO: Optimize this
+                logger.store(**info['stats'])
+
+            agent_index = env.agent_index
+            agent = env.agents[agent_index]
+
+            ep_len = agent.episode_steps
+            ep_ret = agent.episode_reward
 
             timeout = ep_len == max_ep_len
             terminal = d or timeout
             epoch_ended = t==local_steps_per_epoch-1
 
             if terminal or epoch_ended:
-                if epoch_ended and not(terminal):
+                if epoch_ended and not terminal:
                     print('Warning: trajectory cut off by epoch at %d steps.'%ep_len, flush=True)
                 # if trajectory didn't reach terminal state, bootstrap value target
                 if timeout or epoch_ended:
                     _, v, _ = ac.step(torch.as_tensor(o, dtype=torch.float32))
                 else:
                     v = 0
-                buf.finish_path(v)
+                buf.finish_path(agent_index, v)
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
-                o, ep_ret, ep_len = env.reset(), 0, 0
+                    if 'stats' in info and info['stats'] and info['stats']['done_only']:
+                        logger.store(**info['stats']['done_only'])
+                o, r, d = reset(env)
 
 
         # Save model
@@ -352,6 +441,15 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('StopIter', average_only=True)
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
+
+
+def reset(env):
+    """
+    Resets env on first call, after that resets/respawns the current agent
+    :return: obs, reward, done
+    """
+    return env.reset(), 0, False
+
 
 if __name__ == '__main__':
     import argparse
