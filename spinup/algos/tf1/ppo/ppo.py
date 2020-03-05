@@ -401,6 +401,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
+                    if 'stats' in info and info['stats'] and info['stats']['done_only']:
+                        logger.store(**info['stats']['done_only'])
                 o, r, d = reset(env)
 
         # Save model
