@@ -364,6 +364,12 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     start_time = time.time()
     o, r, d = reset(env)
 
+    # TODO: Make multi-agent aware
+    effective_horizon = round(1 / (1 - gamma))
+    effective_horizon_rewards = []
+    for _ in range(num_agents):
+        effective_horizon_rewards.append(deque(maxlen=effective_horizon))
+
     agent_index = env.agent_index
     agent = env.agents[agent_index]
 
@@ -393,6 +399,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
             agent_index = env.agent_index
             agent = env.agents[agent_index]
+
+            calc_effective_horizon_reward(
+                agent_index, effective_horizon_rewards, logger, r)
 
             ep_len = agent.episode_steps
             ep_ret = agent.episode_reward
