@@ -1,3 +1,4 @@
+from collections import deque
 from copy import deepcopy
 
 import numpy as np
@@ -7,7 +8,7 @@ import gym
 import time
 import spinup.algos.pytorch.ppo.core as core
 from spinup.utils.custom_envs import import_custom_envs
-from spinup.utils.logx import EpochLogger
+from spinup.utils.logx import EpochLogger, get_date_str
 from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 
@@ -84,8 +85,7 @@ class PPOBuffer:
             deltas, self.gamma * self.lam)
 
         # the next line computes rewards-to-go, to be targets for the value function
-        self.ret_buf[i][path_slice] = core.discount_cumsum(rews, self.gamma)[
-                                      :-1]
+        self.ret_buf[i][path_slice] = core.discount_cumsum(rews, self.gamma)[:-1]
 
         self.path_start_idx[i] = self.ptr[i]
 
@@ -127,7 +127,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         reinitialize_optimizer_on_resume=True, render=False, notes='',
         **kwargs):
     """
-    Proximal Policy Optimization (by clipping), 
+    Proximal Policy Optimization (by clipping),
 
     with early stopping based on approximate KL
 
@@ -187,7 +187,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         seed (int): Seed for random number generators.
 
-        steps_per_epoch (int): Number of steps of interaction (state-action pairs) 
+        steps_per_epoch (int): Number of steps of interaction (state-action pairs)
             for the agent and the environment in each epoch.
 
         epochs (int): Number of epochs of interaction (equivalent to
@@ -196,21 +196,21 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         gamma (float): Discount factor. (Always between 0 and 1.)
 
         clip_ratio (float): Hyperparameter for clipping in the policy objective.
-            Roughly: how far can the new policy go from the old policy while 
-            still profiting (improving the objective function)? The new policy 
+            Roughly: how far can the new policy go from the old policy while
+            still profiting (improving the objective function)? The new policy
             can still go farther than the clip_ratio says, but it doesn't help
             on the objective anymore. (Usually small, 0.1 to 0.3.) Typically
-            denoted by :math:`\epsilon`. 
+            denoted by :math:`\epsilon`.
 
         pi_lr (float): Learning rate for policy optimizer.
 
         vf_lr (float): Learning rate for value function optimizer.
 
-        train_pi_iters (int): Maximum number of gradient descent steps to take 
+        train_pi_iters (int): Maximum number of gradient descent steps to take
             on policy loss per epoch. (Early stopping may cause optimizer
             to take fewer than this.)
 
-        train_v_iters (int): Number of gradient descent steps to take on 
+        train_v_iters (int): Number of gradient descent steps to take on
             value function per epoch.
 
         lam (float): Lambda for GAE-Lambda. (Always between 0 and 1,
@@ -219,7 +219,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         max_ep_len (int): Maximum length of trajectory / episode / rollout.
 
         target_kl (float): Roughly what KL divergence we think is appropriate
-            between new and old policies after an update. This will get used 
+            between new and old policies after an update. This will get used
             for early stopping. (Usually small, 0.01 or 0.05.)
 
         logger_kwargs (dict): Keyword args for EpochLogger.
@@ -375,6 +375,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
+        info = {}
         for t in range(local_steps_per_epoch):
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
 
@@ -385,7 +386,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             # but returns values for next agent (from its previous action)!
             # TODO: Just return multiple agents observations
             o_prev, r_prev, d_prev, info_prev = env.step(a)
-            # next_o, r, d, _ = env.step(a)
 
             # save and log
             buf.store(o, a, env.curr_reward, v, logp, agent_index)
@@ -428,8 +428,10 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
 
         # Save model
-        if (epoch % save_freq == 0) or (epoch == epochs-1):
-            logger.save_state({'env': env}, None)
+        should_save_model = False
+        best_model = False
+        if (epoch % save_freq == 0) or (epoch == epochs - 1):
+            should_save_model = True
 
         # Perform PPO update!
         update()
@@ -437,9 +439,10 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', with_min_and_max=True)
+        logger.log_tabular('DateTime', get_date_str())
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('VVals', with_min_and_max=True)
-        logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
+        logger.log_tabular('TotalEnvInteracts', (epoch + 1) * steps_per_epoch)
         logger.log_tabular('LossPi', average_only=True)
         logger.log_tabular('LossV', average_only=True)
         logger.log_tabular('DeltaLossPi', average_only=True)
@@ -448,8 +451,27 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('KL', average_only=True)
         logger.log_tabular('ClipFrac', average_only=True)
         logger.log_tabular('StopIter', average_only=True)
-        logger.log_tabular('Time', time.time()-start_time)
+        logger.log_tabular('Time', time.time() - start_time)
+        logger.log_tabular('HorizonReturn', with_min_and_max=True)
+
+        if 'stats' in info and info['stats']:
+            for stat, value in info['stats'].items():
+                logger.log_tabular(stat, with_min_and_max=True)
+
+        if logger.best_category:
+            best_model = True
+            should_save_model = True
+
+        if should_save_model:
+            logger.save_state({'env': env}, None, best_category=logger.best_category)
+
         logger.dump_tabular()
+
+def calc_effective_horizon_reward(agent_index, effective_horizon_rewards,
+                                  logger, r):
+    ehr = effective_horizon_rewards[agent_index]
+    ehr.append(r)
+    logger.store(HorizonReturn=sum(ehr))
 
 
 def reset(env):

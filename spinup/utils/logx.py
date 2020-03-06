@@ -22,8 +22,9 @@ from spinup.utils.mpi_tools import proc_id, mpi_statistics_scalar
 from spinup.utils.serialization_utils import convert_json
 from spinup.utils.save_load_scope import load_scope, save_scope
 
-SIMPLE_SAVE_DIR = 'simple_save_tf1'
-MODEL_ONLY_DIR = 'model_only_tf1'
+TF_SIMPLE_SAVE_DIR = 'simple_save_tf1'
+TF_MODEL_ONLY_DIR = 'model_only_tf1'
+PYTORCH_SAVE_DIR = 'pyt_save'
 
 color2num = dict(
     gray=30,
@@ -102,7 +103,7 @@ def restore_tf_graph_model_only(sess, fpath):
     # on resume. So said hack is disabled.
 
     load_scope('model', fpath, sess)
-    model_info_dir = join(dirname(dirname(fpath)), SIMPLE_SAVE_DIR)
+    model_info_dir = join(dirname(dirname(fpath)), TF_SIMPLE_SAVE_DIR)
     model_info = joblib.load(osp.join(model_info_dir, 'model_info.pkl'))
     graph = tf.get_default_graph()
     model = dict()
@@ -284,7 +285,7 @@ class Logger:
                 self._save_snapshots(best_category)
             if hasattr(self, 'pytorch_saver_elements'):
                 self._pytorch_simple_save(itr)
-                # TODO: Implement pytorch save_model_only and save_snapshots
+                self._save_snapshots(best_category)
 
     def setup_tf_saver(self, sess, inputs, outputs):
         """
@@ -316,7 +317,7 @@ class Logger:
         if proc_id() == 0:
             assert hasattr(self, 'tf_saver_elements'), \
                 "First have to setup saving with self.setup_tf_saver"
-            fpath = SIMPLE_SAVE_DIR + ('%d'%itr if itr is not None else '')
+            fpath = TF_SIMPLE_SAVE_DIR + ('%d' % itr if itr is not None else '')
             fpath = osp.join(self.output_dir, fpath)
             if osp.exists(fpath):
                 # simple_save refuses to be useful if fpath already exists,
@@ -325,7 +326,7 @@ class Logger:
             tf.saved_model.simple_save(export_dir=fpath, **self.tf_saver_elements)
             joblib.dump(self.tf_saver_info, osp.join(fpath, 'model_info.pkl'))
 
-    def _save_snapshots(self, best_category=''):
+    def _save_snapshots(self, best_category='', is_pytorch=True):
         if proc_id() != 0 or not self.num_snapshots_to_keep:
             return
 
@@ -350,17 +351,20 @@ class Logger:
                 shutil.rmtree(old_dir)
             new_dir = join(snapshots_dir, get_date_str())
             os.makedirs(new_dir)
-            curr_simple_save_dir = join(self.output_dir, SIMPLE_SAVE_DIR)
-            curr_model_only_dir = join(self.output_dir, MODEL_ONLY_DIR)
-            shutil.copytree(curr_simple_save_dir, join(new_dir, SIMPLE_SAVE_DIR))
-            shutil.copytree(curr_model_only_dir, join(new_dir, MODEL_ONLY_DIR))
+            if is_pytorch:
+                dirs = [PYTORCH_SAVE_DIR]
+            else:
+                dirs = [TF_MODEL_ONLY_DIR, TF_SIMPLE_SAVE_DIR]
+            for dir_ in dirs:
+                curr_dir = join(self.output_dir, dir_)
+                shutil.copytree(curr_dir, join(new_dir, dir_))
 
             snapshots.append((now, new_dir))
 
     def _save_model_only(self, itr=None):
         # logger.save_state saves optimizer state which we don't want for
         # resuming purposes, so save model variables here separately
-        save_scope('model', join(self.output_dir, f'{MODEL_ONLY_DIR}/'),
+        save_scope('model', join(self.output_dir, f'{TF_MODEL_ONLY_DIR}/'),
                    self.tf_saver_elements['session'])
 
 
@@ -387,7 +391,7 @@ class Logger:
         if proc_id()==0:
             assert hasattr(self, 'pytorch_saver_elements'), \
                 "First have to setup saving with self.setup_pytorch_saver"
-            fpath = 'pyt_save'
+            fpath = PYTORCH_SAVE_DIR
             fpath = osp.join(self.output_dir, fpath)
             fname = 'model' + ('%d'%itr if itr is not None else '') + '.pt'
             fname = osp.join(fpath, fname)

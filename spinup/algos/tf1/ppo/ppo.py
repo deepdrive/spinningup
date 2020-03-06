@@ -96,8 +96,7 @@ class PPOBuffer:
             deltas, self.gamma * self.lam)
 
         # the next line computes rewards-to-go, to be targets for the value function
-        self.ret_buf[i][path_slice] = core.discount_cumsum(rews, self.gamma)[
-                                   :-1]
+        self.ret_buf[i][path_slice] = core.discount_cumsum(rews, self.gamma)[:-1]
 
         self.path_start_idx[i] = self.ptr[i]
 
@@ -108,14 +107,15 @@ class PPOBuffer:
         mean zero and std one). Also, resets some pointers in the buffer.
         """
         assert self.size == self.max_size  # buffer has to be full before you can get
+
+        # Reset pointers so next epoch overwrites buffers
         self.size = 0
         self.ptr = np.zeros((self.num_agents,), dtype=np.int)
         self.path_start_idx = np.zeros((self.num_agents,), dtype=np.int)
 
-        obs_buf = self.obs_buf.reshape(core.combined_shape(
-            self.num_agents * self.n_size, self.obs_dim))
-        act_buf = self.act_buf.reshape(core.combined_shape(
-            self.num_agents * self.n_size, self.act_dim))
+        # Concatenate agents' episodes
+        obs_buf = self.obs_buf.reshape(core.combined_shape(self.num_agents * self.n_size, self.obs_dim))
+        act_buf = self.act_buf.reshape(core.combined_shape(self.num_agents * self.n_size, self.act_dim))
         ret_buf = self.ret_buf.flatten()
         logp_buf = self.logp_buf.flatten()
         adv_buf = self.adv_buf.flatten()
@@ -220,6 +220,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
             to carry over
 
         notes: (str) Experimental notes on what this run is testing
+
     """
     config = deepcopy(locals())
 
@@ -345,8 +346,8 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
                      DeltaLossPi=(pi_l_new - pi_l_old),
                      DeltaLossV=(v_l_new - v_l_old))
 
+    # Prepare for interaction with environment
     start_time = time.time()
-
     o, r, d = reset(env)
 
     # TODO: Make multi-agent aware
@@ -423,7 +424,7 @@ def ppo(env_fn, actor_critic=core.mlp_actor_critic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('DateTime', get_date_str())
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('VVals', with_min_and_max=True)
-        logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
+        logger.log_tabular('TotalEnvInteracts', (epoch + 1) * steps_per_epoch)
         logger.log_tabular('LossPi', average_only=True)
         logger.log_tabular('LossV', average_only=True)
         logger.log_tabular('DeltaLossPi', average_only=True)
