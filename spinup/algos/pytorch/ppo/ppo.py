@@ -426,7 +426,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                         logger.store(**info['stats']['done_only'])
                 o, r, d = reset(env)
 
-
         # Save model
         should_save_model = False
         best_model = False
