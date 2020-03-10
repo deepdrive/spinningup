@@ -313,7 +313,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Main outputs from computation graph
     if resume is not None:
-        # TODO: Below is TF resume, get this working for pytorch
+        # TODO: Below is TF resume, get this working for pytorch. May need to
+        #   save optimizer as well if lowering resume learning rate is not enough
+        #   to avoid initial high divergence.
         # from spinup.utils.test_policy import get_policy_model
         # # Caution! We assume action space has not changed here.
         # should_save_model, _ = get_policy_model(resume, sess)
