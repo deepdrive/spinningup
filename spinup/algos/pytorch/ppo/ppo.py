@@ -125,7 +125,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10, resume=None,
         reinitialize_optimizer_on_resume=True, render=False, notes='',
-        **kwargs):
+        env_config=None, **kwargs):
     """
     Proximal Policy Optimization (by clipping),
 
@@ -240,6 +240,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         notes: (str) Experimental notes on what this run is testing
 
+        env_config (dict): Environment configuration pass through
+
     """
     config = deepcopy(locals())
 
@@ -255,6 +257,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Instantiate environment
     env = env_fn()
+    if hasattr(env.unwrapped, 'configure_env'):
+        env.unwrapped.configure_env(env_config)
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape
 
@@ -263,6 +267,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     if hasattr(env.unwrapped, 'logger'):
         print('Logger set by environment')
         logger_kwargs['logger'] = env.unwrapped.logger
+
+
 
     logger = EpochLogger(**logger_kwargs)
     logger.add_key_stat('trip_pct')
