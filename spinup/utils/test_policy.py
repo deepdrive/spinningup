@@ -2,11 +2,11 @@ import time
 import joblib
 import os
 import os.path as osp
-import tensorflow as tf
 import torch
 from spinup import EpochLogger
 from spinup.utils.logx import restore_tf_graph, restore_tf_graph_model_only, \
-    TF_MODEL_ONLY_DIR
+    TF_MODEL_ONLY_DIR, PYTORCH_SAVE_DIR
+
 
 # TODO: From CSQ orig, merge
 def get_policy_model(fpath, sess, itr='last', use_model_only=True):
@@ -54,7 +54,7 @@ def load_policy_and_env(fpath, itr='last', deterministic=False):
             saves = [int(x[8:]) for x in os.listdir(fpath) if 'tf1_save' in x and len(x)>8]
 
         elif backend == 'pytorch':
-            pytsave_path = osp.join(fpath, 'pyt_save')
+            pytsave_path = osp.join(fpath, PYTORCH_SAVE_DIR)
             # Each file in this folder has naming convention 'modelXX.pt', where
             # 'XX' is either an integer or empty string. Empty string case
             # corresponds to len(x)==8, hence that case is excluded.

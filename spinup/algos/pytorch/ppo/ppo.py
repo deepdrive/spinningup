@@ -1,3 +1,4 @@
+import os
 from collections import deque
 from copy import deepcopy
 
@@ -8,7 +9,7 @@ import gym
 import time
 import spinup.algos.pytorch.ppo.core as core
 from spinup.utils.custom_envs import import_custom_envs
-from spinup.utils.logx import EpochLogger, get_date_str
+from spinup.utils.logx import EpochLogger, get_date_str, PYTORCH_SAVE_DIR
 from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 
@@ -231,8 +232,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             you wish to resume from
 
         reinitialize_optimizer_on_resume: (bool) Whether to initialize
-            non-trainable variables in the tensorflow graph such as Adam
-            state
+            training state in the optimizers, i.e. the individual learning
+            rates for weights in Adam
 
         render: (bool) Whether to render the env during training. Useful for
             checking that resumption of training caused visual performance
@@ -278,9 +279,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Create actor-critic module
     ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
 
-    # Sync params across processes
-    sync_params(ac)
-
     # Count variables
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
     logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n'%var_counts)
@@ -313,21 +311,31 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         obs, ret = data['obs'], data['ret']
         return ((ac.v(obs) - ret)**2).mean()
 
-    # Set up optimizers for policy and value function
-    pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
-    vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
+
 
     # Main outputs from computation graph
     if resume is not None:
-        # TODO: Below is TF resume, get this working for pytorch. May need to
-        #   save optimizer as well if lowering resume learning rate is not enough
-        #   to avoid initial high divergence.
-        # from spinup.utils.test_policy import get_policy_model
-        # # Caution! We assume action space has not changed here.
-        # should_save_model, _ = get_policy_model(resume, sess)
-        # pi, logp, logp_pi, v = (should_save_model['pi'], should_save_model['logp'],
-        #                         should_save_model['logp_pi'], should_save_model['v'])
-        pass
+        checkpoint = torch.load(os.path.join(resume, PYTORCH_SAVE_DIR, 'model.pt'))
+        if isinstance(checkpoint, core.MLPActorCritic):
+            if reinitialize_optimizer_on_resume:
+                raise RuntimeError('No optimizer state in this checkpoint')
+            ac = checkpoint
+
+            # Set up optimizers for policy and value function
+            pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
+            vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
+        else:
+            ac.load_state_dict(checkpoint['ac'])
+            # Set up optimizers for policy and value function
+            pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
+            vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
+            if reinitialize_optimizer_on_resume:
+                pi_optimizer.load_state_dict(checkpoint['pi_optimizer'])
+                vf_optimizer.load_state_dict(checkpoint['vf_optimizer'])
+        ac.train()  # Set to train mode
+
+    # Sync params across processes
+    sync_params(ac)
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
