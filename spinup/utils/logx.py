@@ -160,6 +160,7 @@ class Logger:
         self.logger = logger
         if proc_id()==0:
             if output_dir:
+                # TODO: Clean up this hack, this is not meant to be a date
                 date_str = get_date_str()
                 self.output_dir = output_dir + '_' + date_str
             else:
