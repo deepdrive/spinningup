@@ -450,6 +450,15 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('StopIter', average_only=True)
         logger.log_tabular('Time', time.time() - start_time)
         logger.log_tabular('HorizonReturn', with_min_and_max=True)
+        if env.unwrapped.is_deepdrive:
+            logger.log_tabular('trip_pct', with_min_and_max=True)
+            logger.log_tabular('collided')
+            logger.log_tabular('harmful_gs')
+            logger.log_tabular('timeup')
+            logger.log_tabular('circles')
+            logger.log_tabular('skipped')
+            logger.log_tabular('backwards')
+            logger.log_tabular('won')
 
         if 'stats' in info and info['stats']:
             for stat, value in info['stats'].items():
