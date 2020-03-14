@@ -28,7 +28,8 @@ def get_policy_model(fpath, sess, itr='last', use_model_only=True):
 
     return model, itr
 
-def load_policy_and_env(fpath, itr='last', deterministic=False):
+def load_policy_and_env(fpath, itr='last', deterministic=False, env=None,
+                        net_config=None):
     """
     Load a policy from save, whether it's TF or PyTorch, along with RL env.
 
@@ -71,7 +72,9 @@ def load_policy_and_env(fpath, itr='last', deterministic=False):
     if backend == 'tf1':
         get_action = load_tf_policy(fpath, itr, deterministic)
     else:
-        get_action = load_pytorch_policy(fpath, itr, deterministic)
+        get_action = load_pytorch_policy(
+            fpath=fpath, itr=itr, deterministic=deterministic, env=env,
+            net_config=net_config)
 
     # try to load environment from save
     # (sometimes this will fail because the environment could not be pickled)
@@ -137,13 +140,24 @@ def load_tf_policy(fpath, itr, deterministic=False):
     return get_action
 
 
-def load_pytorch_policy(fpath, itr, deterministic=False):
+def load_pytorch_policy(fpath, itr, deterministic=False, actor_critic_cls=None,
+                        env=None, net_config=None):
     """ Load a pytorch policy saved with Spinning Up Logger."""
+    actor_critic_cls = actor_critic_cls or core.MLPActorCritic  # TODO(support all algos): Don't assume ppo actor critic
 
     fname = osp.join(fpath, 'pyt_save', 'model' + itr + '.pt')
     print('\n\nLoading from %s.\n\n' % fname)
 
-    model = torch.load(fname)
+    checkpoint = torch.load(fname)
+    if isinstance(checkpoint, actor_critic_cls):
+        model = checkpoint
+    else:
+        model = actor_critic_cls(env.observation_space, env.action_space,
+                                 hidden_sizes=net_config['hidden_units'],
+                                 activation=net_config['activation'])
+        model.load_state_dict(checkpoint['ac'])
+
+    model.train()  # Set to train mode
 
     # make function for producing an action given a single state
     def get_action(x):
