@@ -272,6 +272,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
 
     logger = EpochLogger(**logger_kwargs)
+    logger.add_key_stat('won')
     logger.add_key_stat('trip_pct')
     logger.add_key_stat('HorizonReturn')
     logger.save_config(config)
