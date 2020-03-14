@@ -430,12 +430,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                         logger.store(**info['stats']['done_only'])
                 o, r, d = reset(env)
 
-        # Save model
-        should_save_model = False
-        best_model = False
-        if (epoch % save_freq == 0) or (epoch == epochs - 1):
-            should_save_model = True
-
         # Perform PPO update!
         update()
 
