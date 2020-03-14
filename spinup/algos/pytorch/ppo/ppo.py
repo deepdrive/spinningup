@@ -473,14 +473,42 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             for stat, value in info['stats'].items():
                 logger.log_tabular(stat, with_min_and_max=True)
 
-        if logger.best_category:
-            best_model = True
-            should_save_model = True
-
-        if should_save_model:
-            logger.save_state({'env': env}, None, best_category=logger.best_category)
+        if logger.best_category or (epoch % save_freq == 0) or (epoch == epochs - 1):
+            logger.save_state(dict(env=env), pytorch_save=dict(
+                ac=ac.state_dict(),
+                pi_optimizer=pi_optimizer.state_dict(),
+                vf_optimizer=vf_optimizer.state_dict(),
+                epoch=epoch,
+                stats=logger.epoch_dict,
+            ), itr=None, best_category=logger.best_category)
 
         logger.dump_tabular()
+
+
+def get_model_to_resume(resume, ac, pi_lr, vf_lr,
+                        reinitialize_optimizer_on_resume,
+                        actor_critic):
+    model_path = os.path.join(resume, PYTORCH_SAVE_DIR, 'model.pt')
+    checkpoint = torch.load(model_path)
+    if isinstance(checkpoint, actor_critic):
+        if reinitialize_optimizer_on_resume:
+            raise RuntimeError('No optimizer state in this checkpoint')
+        ac = checkpoint
+
+        # Set up optimizers for policy and value function
+        pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
+        vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
+    else:
+        ac.load_state_dict(checkpoint['ac'])
+        # Set up optimizers for policy and value function
+        pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
+        vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
+        if reinitialize_optimizer_on_resume:
+            pi_optimizer.load_state_dict(checkpoint['pi_optimizer'])
+            vf_optimizer.load_state_dict(checkpoint['vf_optimizer'])
+    ac.train()  # Set to train mode
+    return ac, pi_optimizer, vf_optimizer
+
 
 def calc_effective_horizon_reward(agent_index, effective_horizon_rewards,
                                   logger, r):

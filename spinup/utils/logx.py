@@ -248,7 +248,8 @@ class Logger:
             with open(osp.join(self.output_dir, "config.json"), 'w') as out:
                 out.write(output)
 
-    def save_state(self, state_dict, itr=None, best_category=''):
+    def save_state(self, state_dict, itr=None, best_category='',
+                   pytorch_save=None):
         """
         Saves the state of an experiment.
 
@@ -273,6 +274,8 @@ class Logger:
                 new record high, i.e. EpRet, in which case we put it in a
                 special folder.
 
+            pytorch_save: State dicts to save with pytorch into model.pt
+
         """
         if proc_id()==0:
             fname = 'vars.pkl' if itr is None else 'vars%d.pkl'%itr
@@ -283,10 +286,9 @@ class Logger:
             if hasattr(self, 'tf_saver_elements'):
                 self._tf_simple_save(itr)
                 self._save_model_only(itr)
-                self._save_snapshots(best_category)
             if hasattr(self, 'pytorch_saver_elements'):
-                self._pytorch_simple_save(itr)
-                self._save_snapshots(best_category)
+                self._pytorch_simple_save(itr, pytorch_save=pytorch_save)
+            self._save_snapshots(best_category)
 
     def setup_tf_saver(self, sess, inputs, outputs):
         """
@@ -385,7 +387,7 @@ class Logger:
         """
         self.pytorch_saver_elements = what_to_save
 
-    def _pytorch_simple_save(self, itr=None):
+    def _pytorch_simple_save(self, itr=None, pytorch_save=None):
         """
         Saves the PyTorch model (or models).
         """
@@ -397,17 +399,21 @@ class Logger:
             fname = 'model' + ('%d'%itr if itr is not None else '') + '.pt'
             fname = osp.join(fpath, fname)
             os.makedirs(fpath, exist_ok=True)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                # We are using a non-recommended way of saving PyTorch models,
-                # by pickling whole objects (which are dependent on the exact
-                # directory structure at the time of saving) as opposed to
-                # just saving network weights. This works sufficiently well
-                # for the purposes of Spinning Up, but you may want to do
-                # something different for your personal PyTorch project.
-                # We use a catch_warnings() context to avoid the warnings about
-                # not being able to save the source code.
-                torch.save(self.pytorch_saver_elements, fname)
+
+            if pytorch_save is not None:
+                torch.save(pytorch_save, fname)
+            else:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    # We are using a non-recommended way of saving PyTorch models,
+                    # by pickling whole objects (which are dependent on the exact
+                    # directory structure at the time of saving) as opposed to
+                    # just saving network weights. This works sufficiently well
+                    # for the purposes of Spinning Up, but you may want to do
+                    # something different for your personal PyTorch project.
+                    # We use a catch_warnings() context to avoid the warnings about
+                    # not being able to save the source code.
+                    torch.save(self.pytorch_saver_elements, fname)
 
 
     def dump_tabular(self):

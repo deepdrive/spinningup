@@ -4,6 +4,7 @@ import os
 import os.path as osp
 import torch
 from spinup import EpochLogger
+from spinup.algos.pytorch.ppo import core
 from spinup.utils.logx import restore_tf_graph, restore_tf_graph_model_only, \
     TF_MODEL_ONLY_DIR, PYTORCH_SAVE_DIR
 
