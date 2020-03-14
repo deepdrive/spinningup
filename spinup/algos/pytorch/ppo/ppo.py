@@ -279,6 +279,16 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Create actor-critic module
     ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
 
+    # Set up optimizers for policy and value function
+    pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
+    vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
+
+    # Resume
+    if resume is not None:
+        ac, pi_optimizer, vf_optimizer = get_model_to_resume(
+            resume, ac, pi_lr, vf_lr, reinitialize_optimizer_on_resume,
+            actor_critic)
+
     # Count variables
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
     logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n'%var_counts)
@@ -310,29 +320,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     def compute_loss_v(data):
         obs, ret = data['obs'], data['ret']
         return ((ac.v(obs) - ret)**2).mean()
-
-
-
-    # Main outputs from computation graph
-    if resume is not None:
-        checkpoint = torch.load(os.path.join(resume, PYTORCH_SAVE_DIR, 'model.pt'))
-        if isinstance(checkpoint, core.MLPActorCritic):
-            if reinitialize_optimizer_on_resume:
-                raise RuntimeError('No optimizer state in this checkpoint')
-            ac = checkpoint
-
-            # Set up optimizers for policy and value function
-            pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
-            vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
-        else:
-            ac.load_state_dict(checkpoint['ac'])
-            # Set up optimizers for policy and value function
-            pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
-            vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
-            if reinitialize_optimizer_on_resume:
-                pi_optimizer.load_state_dict(checkpoint['pi_optimizer'])
-                vf_optimizer.load_state_dict(checkpoint['vf_optimizer'])
-        ac.train()  # Set to train mode
 
     # Sync params across processes
     sync_params(ac)
