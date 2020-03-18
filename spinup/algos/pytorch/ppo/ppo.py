@@ -126,7 +126,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10, resume=None,
         reinitialize_optimizer_on_resume=True, render=False, notes='',
-        env_config=None, **kwargs):
+        env_config=None, boost_explore=0, **kwargs):
     """
     Proximal Policy Optimization (by clipping),
 
@@ -243,6 +243,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         env_config (dict): Environment configuration pass through
 
+        boost_explore (float): Amount to increase std of actions in order to
+        reinvigorate exploration.
+
     """
     config = deepcopy(locals())
 
@@ -289,6 +292,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         ac, pi_optimizer, vf_optimizer = get_model_to_resume(
             resume, ac, pi_lr, vf_lr, reinitialize_optimizer_on_resume,
             actor_critic)
+
+    if boost_explore:
+        boost_exploration(ac, boost_explore)
 
     # Count variables
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
@@ -474,6 +480,17 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             ), itr=None, best_category=logger.best_category)
 
         logger.dump_tabular()
+
+
+def boost_exploration(ac, boost_explore):
+    state_dict = ac.pi.state_dict()
+    for name, param in state_dict.items():
+        # Don't update if this is not a weight.
+        if name == 'log_std':
+            # Transform the parameter as required.
+            transformed_param = torch.log(torch.exp(param) * boost_explore)
+            # Update the parameter.
+            state_dict[name].copy_(transformed_param)
 
 
 def get_model_to_resume(resume, ac, pi_lr, vf_lr,
