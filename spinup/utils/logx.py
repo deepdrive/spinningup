@@ -447,22 +447,15 @@ class Logger:
 
     def track_key_stats(self, key, stats):
         if key in self.key_stats:
-            if len(stats) == 2:
-                self.say('Key stats need min and max values!')
-            else:
-                # TODO: Name the model folder after the stat that was best
-                mean, std, global_min, global_max = stats
-                curr_stat = self.key_stats[key]
-                if mean > curr_stat['best_avg']:
-                    curr_stat['best_avg'] = mean
-                    self.best_category = self.best_category or key
-                if global_max > curr_stat['best']:
-                    curr_stat['best'] = global_max
-                    self.best_category = self.best_category or key
+            mean = stats[0]
+            curr_best = self.key_stats[key]
+            if mean > curr_best:
+                self.key_stats[key] = mean
+                self.best_category = self.best_category or key
 
     def add_key_stat(self, key):
         assert key not in self.key_stats, f'Key {key} already added'
-        self.key_stats[key] = {'best': -np.inf, 'best_avg': -np.inf}
+        self.key_stats[key] = -np.inf
         self.best_model_snapshots[key] = deque(maxlen=self.num_snapshots_to_keep)
 
 
