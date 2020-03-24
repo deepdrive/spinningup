@@ -1,9 +1,11 @@
+import math
 import os
 from collections import deque
 from copy import deepcopy
 
 import numpy as np
 import torch
+from torch.nn import init
 from torch.optim import Adam
 import gym
 import time
@@ -126,7 +128,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10, resume=None,
         reinitialize_optimizer_on_resume=True, render=False, notes='',
-        env_config=None, boost_explore=0, **kwargs):
+        env_config=None, boost_explore=0, partial_net_load=False,
+        num_inputs_to_add=0, **kwargs):
     """
     Proximal Policy Optimization (by clipping),
 
@@ -246,6 +249,12 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         boost_explore (float): Amount to increase std of actions in order to
         reinvigorate exploration.
 
+        partial_net_load (bool): Whether to partially load the network when
+        resuming. https://pytorch.org/tutorials/beginner/saving_loading_models.html#id4
+
+        num_inputs_to_add (int): Number of new inputs to add, if resuming and
+        partially loading a new network.
+
     """
     config = deepcopy(locals())
 
@@ -281,7 +290,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     logger.save_config(config)
 
     # Create actor-critic module
-    ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
+    ac = actor_critic(env.observation_space, env.action_space,
+                      num_inputs_to_add=num_inputs_to_add, **ac_kwargs)
 
     # Set up optimizers for policy and value function
     pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
@@ -291,7 +301,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     if resume is not None:
         ac, pi_optimizer, vf_optimizer = get_model_to_resume(
             resume, ac, pi_lr, vf_lr, reinitialize_optimizer_on_resume,
-            actor_critic)
+            actor_critic, partial_net_load, num_inputs_to_add)
+        if num_inputs_to_add:
+            add_inputs(ac, ac_kwargs, num_inputs_to_add)
 
     if boost_explore:
         boost_exploration(ac, boost_explore)
@@ -374,7 +386,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     start_time = time.time()
     o, r, d = reset(env)
 
-    # TODO: Make multi-agent aware
     effective_horizon = round(1 / (1 - gamma))
     effective_horizon_rewards = []
     for _ in range(num_agents):
@@ -482,6 +493,28 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.dump_tabular()
 
 
+def add_inputs(ac, ac_kwargs, num_inputs_to_add):
+    # Only works for MLP
+    input_layers = ac.pi.mu_net[0], ac.v.v_net[0]
+    for layer in input_layers:
+        new_input_weights = torch.nn.Parameter(
+            torch.Tensor(ac_kwargs['hidden_sizes'][0],
+                         num_inputs_to_add))
+
+        # Random init
+        # Note: sqrt(5) just makes init random vs
+        # dependent on activation etc...
+        # https://github.com/pytorch/pytorch/issues/15314
+        init.kaiming_uniform_(new_input_weights, a=math.sqrt(5))
+
+        # Decrease initial weights of new inputs in order to slowly
+        # ramp up on them.
+        new_input_weights.data = torch.mul(new_input_weights.data, 1e-4)
+
+        layer.weight = torch.nn.Parameter(
+            torch.cat((layer.weight, new_input_weights), dim=1))
+
+
 def boost_exploration(ac, boost_explore):
     state_dict = ac.pi.state_dict()
     for name, param in state_dict.items():
@@ -495,19 +528,23 @@ def boost_exploration(ac, boost_explore):
 
 def get_model_to_resume(resume, ac, pi_lr, vf_lr,
                         reinitialize_optimizer_on_resume,
-                        actor_critic):
+                        actor_critic,
+                        partial_net_load=False,
+                        num_inputs_to_add=0):
     model_path = os.path.join(resume, PYTORCH_SAVE_DIR, 'model.pt')
     checkpoint = torch.load(model_path)
     if isinstance(checkpoint, actor_critic):
         if reinitialize_optimizer_on_resume:
             raise RuntimeError('No optimizer state in this checkpoint')
+        if partial_net_load or num_inputs_to_add:
+            raise NotImplementedError('Partially loading non-state-dict models not implemented')
         ac = checkpoint
 
         # Set up optimizers for policy and value function
         pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
         vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
     else:
-        ac.load_state_dict(checkpoint['ac'])
+        ac.load_state_dict(checkpoint['ac'], strict=(not partial_net_load))
         # Set up optimizers for policy and value function
         pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
         vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
