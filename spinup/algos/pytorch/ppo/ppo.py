@@ -472,6 +472,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             logger.log_tabular('collided')
             logger.log_tabular('harmful_gs')
             logger.log_tabular('timeup')
+            logger.log_tabular('exited_lane')
             logger.log_tabular('circles')
             logger.log_tabular('skipped')
             logger.log_tabular('backwards')
