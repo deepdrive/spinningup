@@ -113,7 +113,7 @@ def restore_tf_graph_model_only(sess, fpath):
 
 
 def get_date_str():
-    date_str = datetime.now().strftime('%Y_%m-%d_%H-%M.%S')
+    date_str = datetime.now().strftime('%Y_%m-%d_%H-%M.%S.%f')
     return date_str
 
 

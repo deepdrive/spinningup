@@ -2,9 +2,11 @@ import math
 import os
 from collections import deque
 from copy import deepcopy
-
+import bisect
+from numba.typed import List
 import numpy as np
 import torch
+from numba import njit
 from torch.nn import init
 from torch.optim import Adam
 import gym
@@ -24,7 +26,7 @@ class PPOBuffer:
     """
 
     def __init__(self, obs_dim, act_dim, max_size, gamma=0.99, lam=0.95,
-                 num_agents=1):
+                 num_agents=1, cull_ratio:float = 0):
         print(f'Max buffer size {max_size} - # agents {num_agents}')
         assert max_size % num_agents == 0
         n_size = max_size // num_agents
@@ -46,6 +48,9 @@ class PPOBuffer:
         self.n_size = n_size
         self.obs_dim = obs_dim
         self.act_dim = act_dim
+
+    def epoch_ended(self, step_num):
+        return step_num == self.max_size - 1
 
     def store(self, obs, act, rew, val, logp, agent_index):
         """
@@ -72,8 +77,9 @@ class PPOBuffer:
         The "last_val" argument should be 0 if the trajectory ended
         because the agent reached a terminal state (died), and otherwise
         should be V(s_T), the value function estimated for the last state.
-        This allows us to bootstrap the reward-to-go calculation to account
-        for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
+        This allows us to estimate the reward-to-go calculation via bootstrapping
+        to account for timesteps beyond the arbitrary episode horizon
+        (or epoch cutoff).
         """
 
         i = agent_index
@@ -86,6 +92,11 @@ class PPOBuffer:
         deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
         self.adv_buf[i][path_slice] = core.discount_cumsum(
             deltas, self.gamma * self.lam)
+
+        if 'SHIFT_ADVS' in os.environ:
+            advs = self.adv_buf[i][path_slice]
+            # TODO: Tie this to Entropy
+            self.adv_buf[i][path_slice] = advs - np.percentile(advs, 99.9)
 
         # the next line computes rewards-to-go, to be targets for the value function
         self.ret_buf[i][path_slice] = core.discount_cumsum(rews, self.gamma)[:-1]
@@ -121,6 +132,136 @@ class PPOBuffer:
         # TODO: See if we are copying below if we run into memory issues
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
 
+    def record_episode(self, ep_len, ep_ret, step_num):
+        # Implementation only needed if culling currently
+        pass
+
+    def prepare_for_update(self):
+        # Implementation only needed if culling currently
+        pass
+
+
+class PPOBufferCulled(PPOBuffer):
+    def __init__(self, obs_dim, act_dim, local_steps_per_epoch, gamma, lam,
+                 num_agents, cull_ratio):
+        super().__init__(obs_dim, act_dim, local_steps_per_epoch, gamma, lam,
+                         num_agents)
+        self.cull_ratio = cull_ratio
+        if cull_ratio != 0:
+            self._reset()
+
+    def _reset(self):
+        self._staging = []
+        self.episode_returns = List()  # TODO: Make this muli-agent
+        self.episode_lengths = List()  # TODO: Make this muli-agent
+        self.good_episode_indexes = None  # Index of each episode in a reverse sorted list by return # TODO: Make this muli-agent
+        self.total_good_steps = 0  # TODO: Make this muli-agent
+        self.complete_episode_steps = 0  # TODO: Make this muli-agent
+        self.episode_number = 0  # TODO: Make this muli-agent
+        self.last_val = 0  # TODO: Muli-agent
+
+    def finish_path(self, agent_index, last_val=0, stage=True):
+        """
+        Call this at the end of a trajectory, or when one gets cut off
+        by an epoch ending. This looks back in the buffer to where the
+        trajectory started, and uses rewards and value estimates from
+        the whole trajectory to compute advantage estimates with GAE-Lambda,
+        as well as compute the rewards-to-go for each state, to use as
+        the targets for the value function.
+
+        The "last_val" argument should be 0 if the trajectory ended
+        because the agent reached a terminal state (died), and otherwise
+        should be V(s_T), the value function estimated for the last state.
+        This allows us to estimate the reward-to-go calculation via bootstrapping
+        to account for timesteps beyond the arbitrary episode horizon
+        (or epoch cutoff).
+        """
+        if stage:
+            # Record last value for final step of epoch (since we don't know
+            # reward to go).
+            self.last_val = last_val  # TODO: Make this multi-agent
+
+            # We'll do this after culling - will need to change for
+            # general approach though
+            return
+        else:
+            super().finish_path(agent_index, last_val=last_val)
+
+    def store(self, obs, act, rew, val, logp, agent_index, stage=True):
+        """
+        Append one timestep of agent-environment interaction to the buffer.
+        """
+        if stage:
+            self._stage_step(obs, act, rew, val, logp, agent_index)
+        else:
+            super().store(obs, act, rew, val, logp, agent_index)
+
+    def prepare_for_update(self):
+        self._store_good_episodes()
+
+    def epoch_ended(self, step_num):
+        # TODO: Make this multi-agent
+        # TODO: This needs to be made more robust by replaying from
+        #  low valued(judged by return to go) states
+        #  to ensure returns aren't just low because the situation is tricky.
+        #  For now, I'm testing in an env where each episode is pretty much
+        #  the same difficulty to POC this idea so am just culling entire
+        #  episodes if they have low returns.
+        new_steps = step_num - self.complete_episode_steps
+        # Last (partial) episode could be bad, but we're willing to live with
+        # that.
+        ret = self.total_good_steps + new_steps >= self.max_size
+        if ret:
+            self._set_last_step_of_episode()
+        return ret
+
+    def record_episode(self, ep_len, ep_ret, step_num):
+        # TODO: Make this multi-agent
+        self.episode_returns.append(ep_ret)
+        self.episode_lengths.append(ep_len)
+        keep_ratio = 1 - self.cull_ratio
+        episodes_to_keep = math.ceil(len(self.episode_returns) * keep_ratio)
+        self.good_episode_indexes = \
+            np.argsort(self.episode_returns)[::-1][:episodes_to_keep]
+        self.total_good_steps = get_total_good_steps(
+            ep_lengths=self.episode_lengths,
+            ep_indexes=self.good_episode_indexes)
+        self.complete_episode_steps = step_num
+        self.episode_number += 1
+        self._set_last_step_of_episode()
+
+    def _stage_step(self, obs, act, rew, val, logp, agent_index):
+        last_step_of_episode = False  # Will be updated if it is
+        self._staging.append([obs, act, rew, val, logp, agent_index,
+                              self.episode_number, last_step_of_episode])
+
+    def _store_good_episodes(self):
+        for staged in self._staging:
+            (obs, act, rew, val, logp, agent_index, episode_number,
+             last_step_of_episode) = staged
+            if episode_number in self.good_episode_indexes:
+                self.store(obs, act, rew, val, logp, agent_index, stage=False)
+                if last_step_of_episode:
+                    self.finish_path(agent_index, stage=False)
+            elif episode_number == self.episode_number:
+                # TODO: Make this multi-agent
+                self.store(obs, act, rew, val, logp, agent_index, stage=False)
+                if last_step_of_episode:
+                    self.finish_path(agent_index, stage=False, last_val=self.last_val)
+        self._reset()
+
+    def _set_last_step_of_episode(self):
+        self._staging[-1][-1] = True  # Set last_step_of_episode to True
+
+
+def ppo_buffer_factory(obs_dim, act_dim, local_steps_per_epoch, gamma, lam,
+                       num_agents, cull_ratio):
+    if cull_ratio == 0:
+        return PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam,
+                         num_agents)
+    else:
+        return PPOBufferCulled(obs_dim, act_dim, local_steps_per_epoch, gamma,
+                               lam, num_agents, cull_ratio)
 
 
 def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
@@ -129,7 +270,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10, resume=None,
         reinitialize_optimizer_on_resume=True, render=False, notes='',
         env_config=None, boost_explore=0, partial_net_load=False,
-        num_inputs_to_add=0, **kwargs):
+        num_inputs_to_add=0, episode_cull_ratio=0, try_rollouts=0,
+        steps_per_try_rollout=0, **kwargs):
     """
     Proximal Policy Optimization (by clipping),
 
@@ -255,6 +397,13 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         num_inputs_to_add (int): Number of new inputs to add, if resuming and
         partially loading a new network.
 
+        episode_cull_ratio (float): Ratio of bad episodes to cull
+        from epoch
+
+        try_rollouts (int): Number of times to sample actions
+
+        steps_per_try_rollout (int): Number of steps per attempted rollout
+
     """
     config = deepcopy(locals())
 
@@ -314,7 +463,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up experience buffer
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
-    buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam, num_agents)
+    buf = ppo_buffer_factory(obs_dim, act_dim, local_steps_per_epoch, gamma,
+                             lam, num_agents, cull_ratio=episode_cull_ratio)
 
     # Set up function for computing PPO policy loss
     def compute_loss_pi(data):
@@ -394,11 +544,27 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     agent_index = env.agent_index
     agent = env.agents[agent_index]
 
+    # TODO: Try n-things and only return the best for a given o
+    if hasattr(env, 'model_step_hook'):
+        def model_step_hook(obz):
+            return ac.step(torch.as_tensor(obz, dtype=torch.float32))
+
+        env.model_step_hook = model_step_hook
+
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
+        epoch_episode = 0
         info = {}
-        for t in range(local_steps_per_epoch):
-            a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
+        epoch_ended = False
+        step_num = 0
+        while not epoch_ended:
+            if try_rollouts != 0:
+                a, v, logp = env.model_step_hook(o)
+                # TODO: Save start state
+                #  for each rollout, do m env steps, save end state
+                #  Get the best rollout and set env state to that env's state
+            else:
+                a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
 
             if render:
                 env.render()
@@ -429,8 +595,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
             timeout = ep_len == max_ep_len
             terminal = d or timeout
-            epoch_ended = t==local_steps_per_epoch-1
-
+            epoch_ended = buf.epoch_ended(step_num)
             if terminal or epoch_ended:
                 if epoch_ended and not terminal:
                     print('Warning: trajectory cut off by epoch at %d steps.'%ep_len, flush=True)
@@ -441,11 +606,15 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     v = 0
                 buf.finish_path(agent_index, v)
                 if terminal:
+                    buf.record_episode(ep_len=ep_len, ep_ret=ep_ret, step_num=step_num)
                     # only save EpRet / EpLen if trajectory finished
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
                     if 'stats' in info and info['stats'] and info['stats']['done_only']:
                         logger.store(**info['stats']['done_only'])
                 o, r, d = reset(env)
+            step_num += 1
+
+        buf.prepare_for_update()
 
         # Perform PPO update!
         update()
@@ -569,6 +738,13 @@ def reset(env):
     :return: obs, reward, done
     """
     return env.reset(), 0, False
+
+@njit(nogil=True)
+def get_total_good_steps(ep_lengths, ep_indexes):
+    total = 0
+    for ep_i in ep_indexes:
+        total += ep_lengths[ep_i]
+    return total
 
 
 if __name__ == '__main__':
