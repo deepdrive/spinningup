@@ -2,7 +2,7 @@ import math
 import os
 from collections import deque
 from copy import deepcopy
-import bisect
+import random
 from numba.typed import List
 import numpy as np
 import torch
@@ -26,7 +26,7 @@ class PPOBuffer:
     """
 
     def __init__(self, obs_dim, act_dim, max_size, gamma=0.99, lam=0.95,
-                 num_agents=1, cull_ratio:float = 0):
+                 num_agents=1, shift_advs_pct=0.0):
         print(f'Max buffer size {max_size} - # agents {num_agents}')
         assert max_size % num_agents == 0
         n_size = max_size // num_agents
@@ -48,6 +48,7 @@ class PPOBuffer:
         self.n_size = n_size
         self.obs_dim = obs_dim
         self.act_dim = act_dim
+        self.shift_advs_pct = shift_advs_pct
 
     def epoch_ended(self, step_num):
         return step_num == self.max_size - 1
@@ -93,10 +94,12 @@ class PPOBuffer:
         self.adv_buf[i][path_slice] = core.discount_cumsum(
             deltas, self.gamma * self.lam)
 
-        if 'SHIFT_ADVS' in os.environ:
+        if self.shift_advs_pct:
             advs = self.adv_buf[i][path_slice]
             # TODO: Tie this to Entropy
-            self.adv_buf[i][path_slice] = advs - np.percentile(advs, 99.9)
+            # 90 seems to work speed up convergence whereas 99 and 99.9 slow it down
+            # perhaps something to do with size of 1 standard deviation
+            self.adv_buf[i][path_slice] = advs - np.percentile(advs, self.shift_advs_pct)
 
         # the next line computes rewards-to-go, to be targets for the value function
         self.ret_buf[i][path_slice] = core.discount_cumsum(rews, self.gamma)[:-1]
@@ -143,9 +146,9 @@ class PPOBuffer:
 
 class PPOBufferCulled(PPOBuffer):
     def __init__(self, obs_dim, act_dim, local_steps_per_epoch, gamma, lam,
-                 num_agents, cull_ratio):
+                 num_agents, shift_advs_pct, cull_ratio):
         super().__init__(obs_dim, act_dim, local_steps_per_epoch, gamma, lam,
-                         num_agents)
+                         num_agents, shift_advs_pct)
         self.cull_ratio = cull_ratio
         if cull_ratio != 0:
             self._reset()
@@ -255,13 +258,13 @@ class PPOBufferCulled(PPOBuffer):
 
 
 def ppo_buffer_factory(obs_dim, act_dim, local_steps_per_epoch, gamma, lam,
-                       num_agents, cull_ratio):
+                       num_agents, shift_advs_pct, cull_ratio):
     if cull_ratio == 0:
         return PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam,
-                         num_agents)
+                         num_agents, shift_advs_pct)
     else:
         return PPOBufferCulled(obs_dim, act_dim, local_steps_per_epoch, gamma,
-                               lam, num_agents, cull_ratio)
+                               lam, num_agents, shift_advs_pct, cull_ratio)
 
 
 def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
@@ -271,7 +274,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         reinitialize_optimizer_on_resume=True, render=False, notes='',
         env_config=None, boost_explore=0, partial_net_load=False,
         num_inputs_to_add=0, episode_cull_ratio=0, try_rollouts=0,
-        steps_per_try_rollout=0, **kwargs):
+        steps_per_try_rollout=0, take_worst_rollout=False, shift_advs_pct=0,
+        **kwargs):
     """
     Proximal Policy Optimization (by clipping),
 
@@ -404,6 +408,10 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         steps_per_try_rollout (int): Number of steps per attempted rollout
 
+        take_worst_rollout (bool): Use worst rollout in training
+
+        shift_advs_pct (float): Action should be better than this pct of actions
+            to be considered advantageous.
     """
     config = deepcopy(locals())
 
@@ -414,6 +422,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     seed += 10000 * proc_id()
     torch.manual_seed(seed)
     np.random.seed(seed)
+    random.seed(seed)
 
     import_custom_envs()
 
@@ -429,8 +438,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     if hasattr(env.unwrapped, 'logger'):
         print('Logger set by environment')
         logger_kwargs['logger'] = env.unwrapped.logger
-
-
 
     logger = EpochLogger(**logger_kwargs)
     logger.add_key_stat('won')
@@ -464,7 +471,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up experience buffer
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
     buf = ppo_buffer_factory(obs_dim, act_dim, local_steps_per_epoch, gamma,
-                             lam, num_agents, cull_ratio=episode_cull_ratio)
+                             lam, num_agents, shift_advs_pct,
+                             cull_ratio=episode_cull_ratio)
 
     # Set up function for computing PPO policy loss
     def compute_loss_pi(data):
@@ -541,15 +549,17 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     for _ in range(num_agents):
         effective_horizon_rewards.append(deque(maxlen=effective_horizon))
 
-    agent_index = env.agent_index
-    agent = env.agents[agent_index]
+    if hasattr(env, 'agent_index'):
+        agent_index = env.agent_index
+        agent = env.agents[agent_index]
+        is_multi_agent = True
+    else:
+        agent_index = 0
+        agent = None
+        is_multi_agent = False
 
-    # TODO: Try n-things and only return the best for a given o
-    if hasattr(env, 'model_step_hook'):
-        def model_step_hook(obz):
-            return ac.step(torch.as_tensor(obz, dtype=torch.float32))
-
-        env.model_step_hook = model_step_hook
+    def get_action_fn(_obz):
+        return ac.step(torch.as_tensor(_obz, dtype=torch.float32))
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
@@ -557,41 +567,50 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         info = {}
         epoch_ended = False
         step_num = 0
+        ep_len = 0
+        ep_ret = 0
         while not epoch_ended:
             if try_rollouts != 0:
-                a, v, logp = env.model_step_hook(o)
-                # TODO: Save start state
-                #  for each rollout, do m env steps, save end state
-                #  Get the best rollout and set env state to that env's state
+                # a, v, logp, next_o, r, d, info
+                # a, v, logp, obs, r, done, info
+                rollout = do_rollouts(
+                    get_action_fn, env, o, steps_per_try_rollout, try_rollouts,
+                    take_worst_rollout)
             else:
-                a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
+                a, v, logp = get_action_fn(o)
+                # NOTE: For multi-agent, steps current agent,
+                # but returns values for next agent (from its previous action)!
+                # TODO: Just return multiple agents observations
+                next_o, r, d, info = env.step(a)
 
             if render:
                 env.render()
 
-            # NOTE: For multi-agent, steps current agent,
-            # but returns values for next agent (from its previous action)!
-            # TODO: Just return multiple agents observations
-            o_prev, r_prev, d_prev, info_prev = env.step(a)
+            curr_reward = env.curr_reward if is_multi_agent else r
 
             # save and log
-            buf.store(o, a, env.curr_reward, v, logp, agent_index)
+            buf.store(o, a, curr_reward, v, logp, agent_index)
             logger.store(VVals=v)
 
             # Update obs (critical!)
-            o, r, d, info = o_prev, r_prev, d_prev, info_prev
+            o = next_o
 
             if 'stats' in info and info['stats']:  # TODO: Optimize this
                 logger.store(**info['stats'])
 
-            agent_index = env.agent_index
-            agent = env.agents[agent_index]
+            if is_multi_agent:
+                agent_index = env.agent_index
+                agent = env.agents[agent_index]
+
+                # TODO: Store vector of these for each agent when changing step API
+                ep_len = agent.episode_steps
+                ep_ret = agent.episode_reward
+            else:
+                ep_len += 1
+                ep_ret += r
 
             calc_effective_horizon_reward(
                 agent_index, effective_horizon_rewards, logger, r)
-
-            ep_len = agent.episode_steps
-            ep_ret = agent.episode_reward
 
             timeout = ep_len == max_ep_len
             terminal = d or timeout
@@ -612,6 +631,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     if 'stats' in info and info['stats'] and info['stats']['done_only']:
                         logger.store(**info['stats']['done_only'])
                 o, r, d = reset(env)
+                if not is_multi_agent:
+                    ep_len = 0
+                    ep_ret = 0
             step_num += 1
 
         buf.prepare_for_update()
@@ -636,7 +658,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('StopIter', average_only=True)
         logger.log_tabular('Time', time.time() - start_time)
         logger.log_tabular('HorizonReturn', with_min_and_max=True)
-        if env.unwrapped.is_deepdrive:
+        if getattr(env.unwrapped, 'is_deepdrive', False):
             logger.log_tabular('trip_pct', with_min_and_max=True)
             logger.log_tabular('collided')
             logger.log_tabular('harmful_gs')
@@ -661,6 +683,58 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             ), itr=None, best_category=logger.best_category)
 
         logger.dump_tabular()
+
+
+def do_rollouts(get_action_fn, env, start_o, steps_per_try_rollout,
+                try_rollouts, take_worst_rollout=False, is_eval=False):
+    start_state = env.get_state()
+    rollouts = []
+    end_states = []
+    best_ret = math.inf if take_worst_rollout else -math.inf
+    best_rollout_i = None
+    for rollout_i in range(try_rollouts):
+        ret, rollout = do_rollout(start_o, env, get_action_fn,
+                                  is_eval, steps_per_try_rollout)
+        # IDEA: Rank by value instead of return
+        rollouts.append(rollout)
+        end_states.append(env.get_state())
+        if take_worst_rollout:
+            if ret < best_ret:
+                best_rollout_i = rollout_i
+                best_ret = ret
+        elif ret > best_ret:
+            best_rollout_i = rollout_i
+            best_ret = ret
+        if is_eval or rollout_i != try_rollouts - 1:
+            # No need to reset on last rollout as we'll be loading best
+            # rollout's state immediately afterwards during training.
+            # In eval, we need to render out the steps, so it's not much
+            # overhead to rerun the actions
+            # (though will be different if not deterministic)
+            env.set_state(start_state)
+    assert best_rollout_i is not None
+    # a, v, logp, o, r, d, info = rollouts[best_rollout_i]
+    best_rollout = rollouts[best_rollout_i]
+    if not is_eval:
+        env.set_state(end_states[best_rollout_i])
+    return best_rollout
+
+
+def do_rollout(obs, env, get_action_fn, is_eval, steps_per_try_rollout):
+    rollout = []
+    ret = 0
+    for try_step in range(steps_per_try_rollout):
+        if is_eval:
+            # We just get action during eval.
+            a, v, logp = get_action_fn(obs)
+        else:
+            a, v, logp = get_action_fn(obs)
+        obs, r, done, info = env.step(a)
+        rollout.append((a, v, logp, obs, r, done, info))
+        ret += r
+        if done:
+            break
+    return ret, rollout
 
 
 def add_inputs(ac, ac_kwargs, num_inputs_to_add):

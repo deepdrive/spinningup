@@ -2,9 +2,12 @@ import time
 import joblib
 import os
 import os.path as osp
+
+import numpy as np
 import torch
 from spinup import EpochLogger
 from spinup.algos.pytorch.ppo import core
+from spinup.algos.pytorch.ppo.ppo import do_rollouts
 from spinup.utils.logx import restore_tf_graph, restore_tf_graph_model_only, \
     TF_MODEL_ONLY_DIR, PYTORCH_SAVE_DIR
 
@@ -164,12 +167,14 @@ def load_pytorch_policy(fpath, itr, deterministic=False, actor_critic_cls=None,
     def get_action(x):
         with torch.no_grad():
             x = torch.as_tensor(x, dtype=torch.float32)
-            action = model.act(x)
+            action = model.step(x)
         return action
 
     return get_action
 
-def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
+def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True,
+               try_rollouts=0,
+               steps_per_try_rollout=0):
 
     assert env is not None, \
         "Environment not found!\n\n It looks like the environment wasn't saved, " + \
@@ -178,13 +183,26 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True):
 
     logger = EpochLogger()
     o, r, done, ep_ret, ep_len, n = env.reset(), 0, False, 0, 0, 0
+    rollout = []
     while n < num_episodes:
         if render:
             env.render()
             # time.sleep(1e-3)
 
-        a = get_action(o)
-        o, r, done, _ = env.step(a)
+        if try_rollouts != 0:
+            if not rollout:
+                rollout = do_rollouts(
+                    get_action, env, o, steps_per_try_rollout, try_rollouts,
+                    is_eval=True, take_worst_rollout=False)
+            a, v, logp, _o, _r, _done, _info = rollout.pop(0)
+            o, r, done, info = env.step(a)
+            assert np.array_equal(o, _o)
+            assert r == _r
+            assert done == _done
+
+        else:
+            a = get_action(o)[0]
+            o, r, done, info = env.step(a)
         ep_ret += r
         ep_len += 1
 
