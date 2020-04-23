@@ -185,10 +185,6 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True,
     o, r, done, ep_ret, ep_len, n = env.reset(), 0, False, 0, 0, 0
     rollout = []
     while n < num_episodes:
-        if render:
-            env.render()
-            # time.sleep(1e-3)
-
         if try_rollouts != 0:
             if not rollout:
                 rollout = do_rollouts(
@@ -199,10 +195,20 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True,
             assert np.array_equal(o, _o)
             assert r == _r
             assert done == _done
-
+            step_output = o, r, done, info
         else:
             a = get_action(o)[0]
-            o, r, done, info = env.step(a)
+            step_output = env.step(a)
+
+        if render:
+            env.render()
+            # time.sleep(1e-3)
+
+        if hasattr(env, 'last_step_output'):
+            step_output = env.last_step_output
+
+        o, r, done, info = step_output
+
         ep_ret += r
         ep_len += 1
 
