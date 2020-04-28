@@ -403,6 +403,28 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             if render:
                 env.render()
 
+            # Our approach below differs significantly from OpenAI's
+            # in several ways worth noting. In their code:
+            # - o is the only var given a temp container and updated post-store
+            # - the lone temp container is named next_o instead of o_prev, etc
+            # - buf.store() is passed r from env.step() rather than env.curr_reward
+            # - info returned from env.step() is put into a throwaway _ because
+            #   they do not make use of it later, as we do
+            # The first three of these differences give rise to a number of questions, 
+            # nailing down the answers to which might be a good thing TODO:
+            # - The previous o (from the prior epoch step) is actually just o, which 
+            #   is why (presumably) OpenAI named their container var next_o. Are we sure 
+            #   that our terminology isn't actually more confusing here? Whatever our 
+            #   rationale for this switch, it should be recorded here.
+            # - Why are we using curr_reward (which is being set in envs/env.py _step)
+            #   rather than r in env.step()? Again, we should record the rationale here.
+            # - Answering the above question may help us determine whether or not
+            #   there is a good reason for putting r into a container var. d and info,
+            #   in any case, definitely don't need them. If this is being done simply
+            #   for consistency, we should include a clarifying NOTE to that effect. 
+            #   And the comment "Update obs (critical!)" should itself be updated, 
+            #   once this decision has been taken.
+
             # NOTE: For multi-agent, steps current agent,
             # but returns values for next agent (from its previous action)!
             # TODO: Just return multiple agents observations
