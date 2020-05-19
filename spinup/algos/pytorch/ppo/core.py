@@ -65,8 +65,10 @@ class Actor(nn.Module):
 
 class MLPCategoricalActor(Actor):
     
-    def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
+    def __init__(self, obs_dim, act_dim, hidden_sizes, activation,
+                 deterministic=False):
         super().__init__()
+        self.deterministic = deterministic
         self.logits_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
 
     def _distribution(self, obs):
@@ -109,16 +111,20 @@ class MLPActorCritic(nn.Module):
 
 
     def __init__(self, observation_space, action_space, 
-                 hidden_sizes=(64,64), activation=nn.Tanh, num_inputs_to_add=0):
+                 hidden_sizes=(64,64), activation=nn.Tanh, num_inputs_to_add=0,
+                 deterministic=False):
         super().__init__()
+        self.deterministic = deterministic
 
         obs_dim = observation_space.shape[0] - num_inputs_to_add
 
         # policy builder depends on action space
         if isinstance(action_space, Box):
+            if deterministic:
+                raise NotImplementedError('Please implement deterministic sampling from continuous policy first')
             self.pi = MLPGaussianActor(obs_dim, action_space.shape[0], hidden_sizes, activation)
         elif isinstance(action_space, Discrete):
-            self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation)
+            self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation, deterministic)
 
         # build value function
         self.v  = MLPCritic(obs_dim, hidden_sizes, activation)
@@ -126,7 +132,10 @@ class MLPActorCritic(nn.Module):
     def step(self, obs):
         with torch.no_grad():
             pi = self.pi._distribution(obs)
-            a = pi.sample()
+            if self.deterministic:
+                a = pi.probs.max(0)[1]
+            else:
+                a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(obs)
         return a.numpy(), v.numpy(), logp_a.numpy()

@@ -2,6 +2,7 @@ import time
 import joblib
 import os
 import os.path as osp
+import random
 
 import numpy as np
 import torch
@@ -158,7 +159,8 @@ def load_pytorch_policy(fpath, itr, deterministic=False, actor_critic_cls=None,
     else:
         model = actor_critic_cls(env.observation_space, env.action_space,
                                  hidden_sizes=net_config['hidden_units'],
-                                 activation=net_config['activation'])
+                                 activation=net_config['activation'],
+                                 deterministic=deterministic)
         model.load_state_dict(checkpoint['ac'])
 
     model.train()  # Set to train mode
@@ -180,6 +182,10 @@ def run_policy(env, get_action, max_ep_len=None, num_episodes=100, render=True,
         "Environment not found!\n\n It looks like the environment wasn't saved, " + \
         "and we can't run the agent in it. :( \n\n Check out the readthedocs " + \
         "page on Experiment Outputs for how to handle this situation."
+
+    torch.manual_seed(3)
+    np.random.seed(3)
+    random.seed(3)
 
     logger = EpochLogger()
     o, r, done, ep_ret, ep_len, n = env.reset(), 0, False, 0, 0, 0
