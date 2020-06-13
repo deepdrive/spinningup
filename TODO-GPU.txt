@@ -1,0 +1,4 @@
+[ ] Move ppo buffer arrays to cupy from numpy
+[ ] Move MLPActorCritic to device
+[ ] Adam (Make sure optimizer is constructed after moving model to GPU)
+[ ] Test handoff from cupy to pytorch using dlpack

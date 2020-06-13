@@ -17,6 +17,10 @@ from spinup.utils.logx import EpochLogger, get_date_str, PYTORCH_SAVE_DIR
 from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 
+if torch.cuda.is_available():
+    USE_CUDA = True
+else:
+    USE_CUDA = False
 
 class PPOBuffer:
     """
@@ -448,6 +452,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Create actor-critic module
     ac = actor_critic(env.observation_space, env.action_space,
                       num_inputs_to_add=num_inputs_to_add, **ac_kwargs)
+
+    if USE_CUDA:
+        ac.to('cuda')
 
     # Set up optimizers for policy and value function
     pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
